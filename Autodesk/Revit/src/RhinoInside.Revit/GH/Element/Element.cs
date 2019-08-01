@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Diagnostics;
 using System.Windows.Forms;
@@ -12,7 +13,6 @@ using Grasshopper.GUI.Canvas;
 using Grasshopper.GUI;
 
 using Autodesk.Revit.DB;
-using System.ComponentModel;
 
 namespace RhinoInside.Revit.GH.Types
 {
@@ -94,8 +94,8 @@ namespace RhinoInside.Revit.GH.Types
       {
         if (typeof(Q).IsAssignableFrom(typeof(GH_Mesh)))
         {
-          using (var options = new Options { ComputeReferences = true })
-          using (var geometry = element.get_Geometry(options))
+          Options options = null;
+          using (var geometry = element.GetGeometry(ViewDetailLevel.Fine, out options)) using (options)
           {
             if (geometry != null)
             {
@@ -292,18 +292,23 @@ namespace RhinoInside.Revit.GH.Types
         var element = (Autodesk.Revit.DB.Element) this;
         if (element != null)
         {
-          var str = "Revit " + element.GetType().Name;
+          var ToolTip = string.Empty;
+          if(element.Category != null)
+            ToolTip += $"{element.Category.Name} : ";
 
-          var ToolTip = element.Category?.Name ?? string.Empty;
-          if (string.IsNullOrEmpty(ToolTip))
-            ToolTip = element.Name;
-          else if(!string.IsNullOrEmpty(element.Name))
-            ToolTip += " : " + element.Name;
+          if (element.Document.GetElement(element.GetTypeId()) is Autodesk.Revit.DB.ElementType elementType)
+          {
+            if(!string.IsNullOrEmpty(elementType.FamilyName))
+              ToolTip += $"{elementType.FamilyName} : ";
 
-          if(!string.IsNullOrEmpty(ToolTip))
-            str += " \"" + ToolTip + "\"";
+            ToolTip += $"{elementType.Name} : ";
+          }
+          else if (!string.IsNullOrEmpty(element.Name))
+          {
+            ToolTip += $"{element.Name} : ";
+          }
 
-          return str;
+          return $"{ToolTip}id {element.Id}";
         }
       }
 
@@ -317,8 +322,8 @@ namespace RhinoInside.Revit.GH.Types
       out Rhino.Display.DisplayMaterial[] materials, out Rhino.Geometry.Mesh[] meshes, out Rhino.Geometry.Curve[] wires
     )
     {
-      using (var options = new Options { ComputeReferences = true, DetailLevel = DetailLevel == ViewDetailLevel.Undefined ? ViewDetailLevel.Medium : DetailLevel })
-      using (var geometry = element?.get_Geometry(options))
+      Options options = null;
+      using (var geometry = element?.GetGeometry(DetailLevel == ViewDetailLevel.Undefined ? ViewDetailLevel.Medium : DetailLevel, out options)) using (options)
       {
         if (geometry == null)
         {
@@ -853,7 +858,11 @@ namespace RhinoInside.Revit.GH.Parameters
       {
         using (new ModalForm.EditScope())
         {
+#if REVIT_2018
+          var reference = Revit.ActiveUIDocument.Selection.PickObject(Autodesk.Revit.UI.Selection.ObjectType.Subelement);
+#else
           var reference = Revit.ActiveUIDocument.Selection.PickObject(Autodesk.Revit.UI.Selection.ObjectType.Element);
+#endif
           if (reference != null)
             element = Types.Element.Make(reference.ElementId);
         }
@@ -960,8 +969,8 @@ namespace RhinoInside.Revit.GH.Components
       if (!DA.GetData(ObjectType.Name, ref element))
         return;
 
-      using (var options = new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine })
-      using (var geometry = element?.get_Geometry(options))
+      Options options = null;
+      using (var geometry = element?.GetGeometry(ViewDetailLevel.Fine, out options)) using (options)
       {
         var list = geometry?.ToRhino().Where(x => x != null).ToList();
         DA.SetDataList(PropertyName, list);

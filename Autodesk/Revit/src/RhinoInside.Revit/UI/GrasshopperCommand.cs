@@ -62,4 +62,104 @@ namespace RhinoInside.Revit.UI
       }
     }
   }
+
+  abstract class CommandGrasshopperPreview : GrasshopperCommand
+  {
+    public static void CreateUI(RibbonPanel ribbonPanel)
+    {
+#if REVIT_2018
+      var radioData = new RadioButtonGroupData("GrasshopperPreview");
+
+      if (ribbonPanel.AddItem(radioData) is RadioButtonGroup radioButton)
+      {
+        CommandGrasshopperPreviewOff.CreateUI(radioButton);
+        CommandGrasshopperPreviewWireframe.CreateUI(radioButton);
+        CommandGrasshopperPreviewShaded.CreateUI(radioButton);
+      }
+#endif
+    }
+
+    public new class Availability : RhinoCommand.Availability
+    {
+      public override bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories)
+      {
+        return base.IsCommandAvailable(applicationData, selectedCategories) &&
+               !applicationData.ActiveUIDocument.Document.IsFamilyDocument;
+      }
+    }
+  }
+
+#if REVIT_2018
+  [Transaction(TransactionMode.Manual), Regeneration(RegenerationOption.Manual)]
+  class CommandGrasshopperPreviewOff : CommandGrasshopperPreview
+  {
+    public static void CreateUI(RadioButtonGroup radioButtonGroup)
+    {
+      var buttonData = NewToggleButtonData<CommandGrasshopperPreviewOff, Availability>("Off");
+
+      if (radioButtonGroup.AddItem(buttonData) is ToggleButton pushButton)
+      {
+        pushButton.ToolTip = "Don't draw any preview geometry";
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Off_24x24.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Off_24x24.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+      }
+    }
+
+    public override Result Execute(ExternalCommandData data, ref string message, ElementSet elements)
+    {
+      GH.PreviewServer.PreviewMode = Grasshopper.Kernel.GH_PreviewMode.Disabled;
+      Revit.RefreshActiveView();
+      return Result.Succeeded;
+    }
+  }
+
+  [Transaction(TransactionMode.Manual), Regeneration(RegenerationOption.Manual)]
+  class CommandGrasshopperPreviewWireframe : CommandGrasshopperPreview
+  {
+    public static void CreateUI(RadioButtonGroup radioButtonGroup)
+    {
+      var buttonData = NewToggleButtonData<CommandGrasshopperPreviewWireframe, Availability>("Wireframe");
+
+      if (radioButtonGroup.AddItem(buttonData) is ToggleButton pushButton)
+      {
+        pushButton.ToolTip = "Draw wireframe preview geometry";
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Wireframe_24x24.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Wireframe_24x24.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+      }
+    }
+
+    public override Result Execute(ExternalCommandData data, ref string message, ElementSet elements)
+    {
+      GH.PreviewServer.PreviewMode = Grasshopper.Kernel.GH_PreviewMode.Wireframe;
+      Revit.RefreshActiveView();
+      return Result.Succeeded;
+    }
+  }
+
+  [Transaction(TransactionMode.Manual), Regeneration(RegenerationOption.Manual)]
+  class CommandGrasshopperPreviewShaded : CommandGrasshopperPreview
+  {
+    public static void CreateUI(RadioButtonGroup radioButtonGroup)
+    {
+      var buttonData = NewToggleButtonData<CommandGrasshopperPreviewShaded, Availability>("Shaded");
+
+      if (radioButtonGroup.AddItem(buttonData) is ToggleButton pushButton)
+      {
+        pushButton.ToolTip = "Draw shaded preview geometry";
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Shaded_24x24.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Shaded_24x24.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+      }
+    }
+
+    public override Result Execute(ExternalCommandData data, ref string message, ElementSet elements)
+    {
+      GH.PreviewServer.PreviewMode = Grasshopper.Kernel.GH_PreviewMode.Shaded;
+      Revit.RefreshActiveView();
+      return Result.Succeeded;
+    }
+  }
+#endif
 }

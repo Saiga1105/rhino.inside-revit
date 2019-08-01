@@ -27,6 +27,24 @@ namespace RhinoInside.Revit
     }
     #endregion
 
+    #region Geometry
+    public static Autodesk.Revit.DB.GeometryElement GetGeometry(this Autodesk.Revit.DB.Element element, ViewDetailLevel viewDetailLevel, out Options options)
+    {
+      options = new Options { ComputeReferences = true, DetailLevel = viewDetailLevel };
+      var geometry = element.get_Geometry(options);
+
+      if (!(geometry?.Any() ?? false) && element is GenericForm form && !form.Combinations.IsEmpty)
+      {
+        geometry.Dispose();
+
+        options.IncludeNonVisibleObjects = true;
+        return element.get_Geometry(options);
+      }
+
+      return geometry;
+    }
+    #endregion
+
     #region Levels
     public static Autodesk.Revit.DB.Level FindLevelByElevation(this Autodesk.Revit.DB.Document doc, double elevation)
     {
@@ -82,6 +100,35 @@ namespace RhinoInside.Revit
       }
 
       return Enumerable.Empty<Autodesk.Revit.DB.Parameter>();
+    }
+
+    public static void CopyParametersFrom(this Autodesk.Revit.DB.Element to, Autodesk.Revit.DB.Element from, ICollection<BuiltInParameter> parametersMask = null)
+    {
+      if (from != null && to != null)
+      {
+        foreach (var previousParameter in from.GetParameters(ParameterSource.Any))
+          using (previousParameter)
+          using (var param = to.get_Parameter(previousParameter.Definition))
+          {
+            if (param == null || param.IsReadOnly)
+              continue;
+
+            if (parametersMask != null)
+            if (param.Definition is InternalDefinition internalDefinition)
+            {
+              if (parametersMask.Contains(internalDefinition.BuiltInParameter))
+                continue;
+            }
+
+            switch (previousParameter.StorageType)
+            {
+              case StorageType.Integer:   param.Set(previousParameter.AsInteger()); break;
+              case StorageType.Double:    param.Set(previousParameter.AsDouble()); break;
+              case StorageType.String:    param.Set(previousParameter.AsString()); break;
+              case StorageType.ElementId: param.Set(previousParameter.AsElementId()); break;
+            }
+          }
+      }
     }
     #endregion
   }
@@ -290,11 +337,7 @@ namespace RhinoInside.Revit
           var e = new Rhino.Geometry.Ellipse(plane, ellipse.RadiusX, ellipse.RadiusY);
           var n = e.ToNurbsCurve();
           if (ellipse.IsBound)
-          {
-            var t0 = Math.IEEERemainder(ellipse.GetEndParameter(0), 2.0 * Math.PI);
-            var t1 = Math.IEEERemainder(ellipse.GetEndParameter(1), 2.0 * Math.PI);
-            return n.Trim(t0, t1);
-          }
+            return n.Trim(ellipse.GetEndParameter(0), ellipse.GetEndParameter(1));
 
           return n;
         }
@@ -343,6 +386,11 @@ namespace RhinoInside.Revit
       }
     }
 
+    public static Rhino.Geometry.PolylineCurve ToRhino(this Autodesk.Revit.DB.PolyLine polyline)
+    {
+      return new Rhino.Geometry.PolylineCurve(polyline.GetCoordinates().ToRhino());
+    }
+
     public static IEnumerable<Rhino.Geometry.Curve> ToRhino(this IEnumerable<CurveLoop> loops)
     {
       foreach (var loop in loops)
@@ -365,7 +413,7 @@ namespace RhinoInside.Revit
     public static Rhino.Geometry.RevSurface ToRhino(this Autodesk.Revit.DB.ConicalSurface surface, Interval interval)
     {
       var plane = new Rhino.Geometry.Plane(surface.Origin.ToRhino(), (Vector3d) surface.XDir.ToRhino(), (Vector3d) surface.YDir.ToRhino());
-      double height = interval.Min;
+      double height = interval.Max;
       var cone = new Rhino.Geometry.Cone(plane, height, Math.Tan(surface.HalfAngle) * height);
 
       return cone.ToRevSurface();
@@ -392,48 +440,64 @@ namespace RhinoInside.Revit
       return Rhino.Geometry.RevSurface.Create(curve, axis);
     }
 
-    public static Rhino.Geometry.Brep CreateTrimmedSurface(this Rhino.Geometry.BrepFace face, IEnumerable<Rhino.Geometry.Curve> curves, double tolerance)
+    public static Rhino.Geometry.Brep JoinAndMerge(this ICollection<Rhino.Geometry.Brep> brepFaces, double tolerance)
     {
-      var trimmedBrep = face.Split(curves, Revit.VertexTolerance);
+      if (brepFaces.Count == 0)
+        return null;
 
+      if (brepFaces.Count == 1)
+        return brepFaces.First();
+
+      ICollection<Brep> joinedBreps = Brep.JoinBreps(brepFaces, tolerance);
+      if (joinedBreps == null)
+        joinedBreps = brepFaces;
+      else if (joinedBreps.Count == 1)
+        return joinedBreps.First();
+
+      return Brep.MergeBreps(joinedBreps, tolerance);
+    }
+
+    static Rhino.Geometry.Brep TrimFaces(this Rhino.Geometry.Brep brep, IEnumerable<Rhino.Geometry.Curve> loops, Autodesk.Revit.DB.Face face)
+    {
+      var brepFaces = new List<Brep>();
+
+      foreach (var brepFace in brep?.Faces ?? Enumerable.Empty<BrepFace>())
       {
-        var nakedFaces = new List<int>();
-        foreach (var trimedFace in trimmedBrep.Faces)
+#if REVIT_2018
+        brepFace.OrientationIsReversed = !face.OrientationMatchesSurfaceOrientation; 
+#endif
+
+        var trimmedBrep = brepFace.Split(loops, Revit.VertexTolerance);
+
+        foreach (var trimmedFace in trimmedBrep.Faces.OrderByDescending(x => x.FaceIndex))
         {
-          foreach (var trim in trimedFace.Loops.SelectMany(loop => loop.Trims).Where(trim => trim.Edge.Valence == EdgeAdjacency.Naked))
+          // Remove holes, faces with only interior edges
+          if (!trimmedFace.Loops.SelectMany(loop => loop.Trims).Where(trim => trim.TrimType != BrepTrimType.Singular && trim.Edge.Valence != EdgeAdjacency.Interior).Any())
           {
-            var midPoint = trim.Edge.PointAtNormalizedLength(0.5);
-            if (!curves.Where(curve => curve.ClosestPoint(midPoint, out var t, tolerance)).Any())
+            trimmedBrep.Faces.RemoveAt(trimmedFace.FaceIndex);
+            continue;
+          }
+
+          // Remove ears, faces with edges not in the boundary
+          foreach (var trim in trimmedFace.Loops.SelectMany(loop => loop.Trims).Where(trim => trim.TrimType != BrepTrimType.Singular && trim.Edge.Valence == EdgeAdjacency.Naked))
+          {
+            var midPoint = trim.Edge.PointAt(trim.Edge.Domain.Mid);
+
+            var intersectionResult = face.Project(midPoint.ToHost());
+            if (intersectionResult == null || !face.IsInside(intersectionResult.UVPoint))
             {
-              nakedFaces.Add(trimedFace.FaceIndex);
+              trimmedBrep.Faces.RemoveAt(trimmedFace.FaceIndex);
               break;
             }
           }
         }
 
-        foreach (var nakedFace in nakedFaces.OrderByDescending(x => x))
-          trimmedBrep.Faces.RemoveAt(nakedFace);
+        brepFaces.Add(trimmedBrep);
       }
 
-      {
-        var interiorFaces = new List<int>();
-        foreach (var trimedFace in trimmedBrep.Faces)
-        {
-          foreach (var trim in trimedFace.Loops.SelectMany(loop => loop.Trims).Where(trim => trim.Edge.Valence == EdgeAdjacency.Interior))
-          {
-            if (trim.Loop.LoopType == BrepLoopType.Outer)
-            {
-              interiorFaces.Add(trimedFace.FaceIndex);
-              break;
-            }
-          }
-        }
-
-        foreach (var interiorFace in interiorFaces.OrderByDescending(x => x))
-          trimmedBrep.Faces.RemoveAt(interiorFace);
-      }
-
-      return trimmedBrep;
+      return brepFaces.Count == 0 ?
+             brep :
+             brepFaces.JoinAndMerge(Revit.VertexTolerance);
     }
 
 #if !REVIT_2018
@@ -472,6 +536,12 @@ namespace RhinoInside.Revit
 
           return Autodesk.Revit.DB.RevolvedSurface.Create(new Frame(ECStoWCS.Origin, ECStoWCS.BasisX, ECStoWCS.BasisY, ECStoWCS.BasisZ), profileInWCS);
         }
+        case RuledFace ruledFace:
+        {
+          var profileCurve0 = ruledFace.get_Curve(0);
+          var profileCurve1 = ruledFace.get_Curve(1);
+          return Autodesk.Revit.DB.RuledSurface.Create(profileCurve0, profileCurve1);
+        }
       }
 
       return null;
@@ -490,9 +560,19 @@ namespace RhinoInside.Revit
 
       return profileCurve.CreateTransformed(ECStoWCS);
     }
+
+    internal static bool HasFirstProfilePoint(this RuledSurface ruledSurface)
+    {
+      return ruledSurface.GetFirstProfilePoint() != null;
+    }
+
+    internal static bool HasSecondProfilePoint(this RuledSurface ruledSurface)
+    {
+      return ruledSurface.GetSecondProfilePoint() != null;
+    }
 #endif
 
-    public static Rhino.Geometry.Brep ToRhino(this Autodesk.Revit.DB.Face face)
+    public static Rhino.Geometry.Brep ToRhino(this Autodesk.Revit.DB.Face face, bool untrimmed = false)
     {
       using (var surface = face.GetSurface())
       {
@@ -502,108 +582,156 @@ namespace RhinoInside.Revit
         switch (surface)
         {
           case Autodesk.Revit.DB.Plane planeSurface:
-            {
-              var plane = new Rhino.Geometry.Plane(planeSurface.Origin.ToRhino(), (Vector3d) planeSurface.XVec.ToRhino(), (Vector3d) planeSurface.YVec.ToRhino());
+          {
+            var plane = new Rhino.Geometry.Plane(planeSurface.Origin.ToRhino(), (Vector3d) planeSurface.XVec.ToRhino(), (Vector3d) planeSurface.YVec.ToRhino());
 
-              var bbox = BoundingBox.Empty;
-              foreach (var loop in loops)
+            var bbox = BoundingBox.Empty;
+            foreach (var loop in loops)
+            {
+              var edgeBoundingBox = loop.GetBoundingBox(plane);
+              bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+            }
+
+            brep = Brep.CreateFromSurface(planeSurface.ToRhino(new Interval(bbox.Min.X, bbox.Max.X), new Interval(bbox.Min.Y, bbox.Max.Y)));
+            break;
+          }
+          case Autodesk.Revit.DB.ConicalSurface conicalSurface:
+          {
+            var plane = new Rhino.Geometry.Plane(conicalSurface.Origin.ToRhino(), (Vector3d) conicalSurface.XDir.ToRhino(), (Vector3d) conicalSurface.YDir.ToRhino());
+
+            var bbox = BoundingBox.Empty;
+            foreach (var loop in loops)
+            {
+              var edgeBoundingBox = loop.GetBoundingBox(plane);
+              bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+            }
+
+            brep = Rhino.Geometry.Brep.CreateFromRevSurface(conicalSurface.ToRhino(new Interval(bbox.Min.Z, bbox.Max.Z)), false, false);
+            break;
+          }
+          case Autodesk.Revit.DB.CylindricalSurface cylindricalSurface:
+          {
+            var plane = new Rhino.Geometry.Plane(cylindricalSurface.Origin.ToRhino(), (Vector3d) cylindricalSurface.XDir.ToRhino(), (Vector3d) cylindricalSurface.YDir.ToRhino());
+
+            var bbox = BoundingBox.Empty;
+            foreach (var loop in loops)
+            {
+              var edgeBoundingBox = loop.GetBoundingBox(plane);
+              bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+            }
+
+            brep = Rhino.Geometry.Brep.CreateFromRevSurface(cylindricalSurface.ToRhino(new Interval(bbox.Min.Z, bbox.Max.Z)), false, false);
+            break;
+          }
+          case Autodesk.Revit.DB.RevolvedSurface revolvedSurface:
+          {
+            var plane = new Rhino.Geometry.Plane(revolvedSurface.Origin.ToRhino(), (Vector3d) revolvedSurface.XDir.ToRhino(), (Vector3d) revolvedSurface.YDir.ToRhino());
+
+            var bbox = BoundingBox.Empty;
+            foreach (var loop in loops)
+            {
+              var edgeBoundingBox = loop.GetBoundingBox(plane);
+              bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+            }
+
+            brep = Rhino.Geometry.Brep.CreateFromRevSurface(revolvedSurface.ToRhino(new Interval(bbox.Min.Z, bbox.Max.Z)), false, false);
+            break;
+          }
+          case Autodesk.Revit.DB.RuledSurface ruledSurface:
+          {
+            var curves = new List<Rhino.Geometry.Curve>();
+            Rhino.Geometry.Point3d start = Rhino.Geometry.Point3d.Unset, end = Rhino.Geometry.Point3d.Unset;
+
+            if (ruledSurface.HasFirstProfilePoint())
+              start = ruledSurface.GetFirstProfilePoint().ToRhino();
+            else
+              curves.Add(ruledSurface.GetFirstProfileCurve().ToRhino());
+
+            if (ruledSurface.HasSecondProfilePoint())
+              end = ruledSurface.GetSecondProfilePoint().ToRhino();
+            else
+              curves.Add(ruledSurface.GetSecondProfileCurve().ToRhino());
+
+            var lofts = Rhino.Geometry.Brep.CreateFromLoft(curves, start, end, LoftType.Straight, false);
+            if (lofts.Length == 1)
+              brep = lofts[0];
+            else
+              brep = Rhino.Geometry.Brep.MergeBreps(lofts, Revit.VertexTolerance);
+            break;
+          }
+          case Autodesk.Revit.DB.HermiteSurface hermiteSurface:
+          {
+            using (var nurbsData = ExportUtils.GetNurbsSurfaceDataForFace(face))
+            {
+              var degreeU = nurbsData.DegreeU;
+              var degreeV = nurbsData.DegreeV;
+
+              var knotsU = nurbsData.GetKnotsU();
+              var knotsV = nurbsData.GetKnotsV();
+
+              int controlPointCountU = knotsU.Count - degreeU - 1;
+              int controlPointCountV = knotsV.Count - degreeV - 1;
+
+              var nurbsSurface = NurbsSurface.Create(3, nurbsData.IsRational, degreeU + 1, degreeV + 1, controlPointCountU, controlPointCountV);
+
+              var controlPoints = nurbsData.GetControlPoints();
+              var weights = nurbsData.GetWeights();
+
+              var points = nurbsSurface.Points;
+              for (int u = 0; u < controlPointCountU; u++)
               {
-                var edgeBoundingBox = loop.GetBoundingBox(plane);
-                bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+                for (int v = 0; v < controlPointCountU; v++)
+                {
+                  var pt = controlPoints[u + (v * controlPointCountU)];
+                  if (nurbsData.IsRational)
+                  {
+                    double w = weights[u + (v * controlPointCountU)];
+                    points.SetPoint(u, v, pt.X * w, pt.Y * w, pt.Z * w, w);
+                  }
+                  else
+                  {
+                    points.SetPoint(u, v, pt.X, pt.Y, pt.Z);
+                  }
+                }
               }
 
-              brep = Brep.CreateFromSurface(planeSurface.ToRhino(new Interval(bbox.Min.X, bbox.Max.X), new Interval(bbox.Min.Y, bbox.Max.Y)));
-              break;
-            }
-          case ConicalSurface conicalSurface:
-            {
-              var plane = new Rhino.Geometry.Plane(conicalSurface.Origin.ToRhino(), (Vector3d) conicalSurface.XDir.ToRhino(), (Vector3d) conicalSurface.YDir.ToRhino());
-
-              var bbox = BoundingBox.Empty;
-              foreach (var loop in loops)
               {
-                var edgeBoundingBox = loop.GetBoundingBox(plane);
-                bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+                var knots = nurbsSurface.KnotsU;
+                int index = 0;
+                foreach (var w in knotsU.Skip(1).Take(knots.Count))
+                  knots[index++] = w;
               }
 
-              brep = Rhino.Geometry.Brep.CreateFromRevSurface(conicalSurface.ToRhino(new Interval(bbox.Min.Z, bbox.Max.Z)), false, false);
-              break;
-            }
-          case CylindricalSurface cylindricalSurface:
-            {
-              var plane = new Rhino.Geometry.Plane(cylindricalSurface.Origin.ToRhino(), (Vector3d) cylindricalSurface.XDir.ToRhino(), (Vector3d) cylindricalSurface.YDir.ToRhino());
-
-              var bbox = BoundingBox.Empty;
-              foreach (var loop in loops)
               {
-                var edgeBoundingBox = loop.GetBoundingBox(plane);
-                bbox = BoundingBox.Union(bbox, edgeBoundingBox);
+                var knots = nurbsSurface.KnotsV;
+                int index = 0;
+                foreach (var w in knotsV.Skip(1).Take(knots.Count))
+                  knots[index++] = w;
               }
 
-              brep = Rhino.Geometry.Brep.CreateFromRevSurface(cylindricalSurface.ToRhino(new Interval(bbox.Min.Z, bbox.Max.Z)), false, false);
-              break;
+              brep = Brep.CreateFromSurface(nurbsSurface);
             }
-          case RevolvedSurface revolvedSurface:
-            {
-              var plane = new Rhino.Geometry.Plane(revolvedSurface.Origin.ToRhino(), (Vector3d) revolvedSurface.XDir.ToRhino(), (Vector3d) revolvedSurface.YDir.ToRhino());
 
-              var bbox = BoundingBox.Empty;
-              foreach (var loop in loops)
-              {
-                var edgeBoundingBox = loop.GetBoundingBox(plane);
-                bbox = BoundingBox.Union(bbox, edgeBoundingBox);
-              }
-
-              brep = Rhino.Geometry.Brep.CreateFromRevSurface(revolvedSurface.ToRhino(new Interval(bbox.Min.Z, bbox.Max.Z)), false, false);
-              break;
-            }
-          default:
-            return null;
+            break;
+          }
+          default: throw new NotImplementedException();
         }
 
-        Debug.Assert(brep.Faces.Count == 1);
+        if (untrimmed)
+          return brep;
 
-#if REVIT_2018
-        brep.Faces[0].OrientationIsReversed = !face.OrientationMatchesSurfaceOrientation;
-#endif
-        return brep.Faces[0].CreateTrimmedSurface(loops, Revit.VertexTolerance);
+        try { return brep?.TrimFaces(loops, face); }
+        finally { brep?.Dispose(); }
       }
     }
 
-    public static Rhino.Geometry.GeometryBase ToRhino(this Autodesk.Revit.DB.Solid solid)
+    public static Rhino.Geometry.Brep ToRhino(this Autodesk.Revit.DB.Solid solid)
     {
-      bool hasNotImplementedFaces = false;
-
-      foreach (var face in solid.Faces)
-      {
-        if (hasNotImplementedFaces = !(face is PlanarFace /*|| face is ConicalFace*/ || face is CylindricalFace || face is RevolvedFace))
-          break;
-      }
-
-      if (hasNotImplementedFaces)
-      {
-        // Emergency conversion to mesh
-        var triangulateLevelOfDetail = GraphicAttributes.Peek.TriangulateLevelOfDetail;
-        var facesMeshes = new List<Rhino.Geometry.Mesh>(solid.Faces.Size);
-        foreach (var face in solid.Faces.OfType<Face>())
-          facesMeshes.Add((double.IsNaN(triangulateLevelOfDetail) ? face.Triangulate() : face.Triangulate(triangulateLevelOfDetail)).ToRhino());
-
-        if (facesMeshes.Count > 0)
-        {
-          var mesh = new Rhino.Geometry.Mesh();
-
-          mesh.Append(facesMeshes);
-          return mesh;
-        }
-
-        return null;
-      }
-      else
-      {
-        var brepsToJoin = solid.Faces.Cast<Face>().Select(x => x.ToRhino()).ToArray();
-        var breps = Rhino.Geometry.Brep.JoinBreps(brepsToJoin, Revit.VertexTolerance);
-        return breps?.Length == 1 ? breps[0] : Rhino.Geometry.Brep.MergeBreps(breps, Revit.VertexTolerance);
-      }
+      return solid.Faces.
+             Cast<Face>().
+             Select(x => x.ToRhino()).
+             ToArray().
+             JoinAndMerge(Revit.VertexTolerance);
     }
 
     public static Rhino.Geometry.Mesh ToRhino(this Autodesk.Revit.DB.Mesh mesh)
@@ -642,7 +770,6 @@ namespace RhinoInside.Revit
             break;
           case Autodesk.Revit.DB.Mesh mesh:
             var m = mesh.ToRhino();
-            m.Faces.ConvertTrianglesToQuads(Revit.AngleTolerance, 0.0);
 
             if (scaleFactor != 1.0)
               m?.Scale(scaleFactor);
@@ -676,7 +803,6 @@ namespace RhinoInside.Revit
         }
       }
     }
-
     #endregion
 
     #region GetPreviewMaterials
@@ -749,22 +875,37 @@ namespace RhinoInside.Revit
         switch (geometry)
         {
           case Autodesk.Revit.DB.GeometryInstance instance:
+          {
             foreach (var g in instance.GetInstanceGeometry().GetPreviewMeshes())
               yield return g;
             break;
+          }
           case Autodesk.Revit.DB.Mesh mesh:
+          {
             if (mesh.NumTriangles <= 0)
               continue;
 
             var m = mesh.ToRhino();
-            m.Faces.ConvertTrianglesToQuads(Math.PI / 90.0, 0.0);
 
             if (scaleFactor != 1.0)
               m?.Scale(scaleFactor);
 
             yield return m;
             break;
+          }
+          case Autodesk.Revit.DB.Face face:
+          {
+            var meshingParameters = GraphicAttributes.Peek.MeshingParameters;
+            var f = (meshingParameters == null ? face.Triangulate() : face.Triangulate(meshingParameters.RelativeTolerance)).ToRhino();
+
+            if (scaleFactor != 1.0)
+              f?.Scale(scaleFactor);
+
+            yield return f;
+            break;
+          }
           case Autodesk.Revit.DB.Solid solid:
+          {
             if (solid.Faces.IsEmpty)
               continue;
 
@@ -775,7 +916,6 @@ namespace RhinoInside.Revit
             foreach (var face in solidFaces)
             {
               var f = (meshingParameters == null ? face.Triangulate() : face.Triangulate(meshingParameters.RelativeTolerance)).ToRhino();
-              //f.Faces.ConvertTrianglesToQuads(Math.PI / 90.0, 0.0);
 
               if (scaleFactor != 1.0)
                 f?.Scale(scaleFactor);
@@ -786,7 +926,7 @@ namespace RhinoInside.Revit
                 facesMeshes.Add(f);
             }
 
-            if(facesMeshes != null)
+            if (facesMeshes != null)
             {
               if (facesMeshes.Count > 0)
               {
@@ -799,6 +939,7 @@ namespace RhinoInside.Revit
               yield return null;
             }
             break;
+          }
         }
       }
     }
@@ -818,24 +959,38 @@ namespace RhinoInside.Revit
         switch (geometry)
         {
           case Autodesk.Revit.DB.GeometryInstance instance:
+          {
             foreach (var g in instance.GetInstanceGeometry().GetPreviewWires())
               yield return g;
             break;
+          }
           case Autodesk.Revit.DB.Solid solid:
+          {
             if (solid.Faces.IsEmpty)
               continue;
 
-            foreach (var edge in solid.Edges.OfType<Edge>())
-            {
-              var s = edge.AsCurve().ToRhino();
-
-              if (scaleFactor != 1.0)
-                s?.Scale(scaleFactor);
-
-              yield return s;
-            }
+            foreach (var wire in solid.Edges.Cast<Edge>().Select(x => x.AsCurve()).GetPreviewWires())
+              yield return wire;
             break;
+          }
+          case Autodesk.Revit.DB.Face face:
+          {
+            foreach (var wire in face.GetEdgesAsCurveLoops().SelectMany(x => x.GetPreviewWires()))
+              yield return wire;
+            break;
+          }
+          case Autodesk.Revit.DB.Edge edge:
+          {
+            var e = edge.AsCurve().ToRhino();
+
+            if (scaleFactor != 1.0)
+              e?.Scale(scaleFactor);
+
+            yield return e;
+            break;
+          }
           case Autodesk.Revit.DB.Curve curve:
+          {
             var c = curve.ToRhino();
 
             if (scaleFactor != 1.0)
@@ -843,17 +998,20 @@ namespace RhinoInside.Revit
 
             yield return c;
             break;
+          }
           case Autodesk.Revit.DB.PolyLine polyline:
+          {
             if (polyline.NumberOfCoordinates <= 0)
               continue;
 
-            var p = new Rhino.Geometry.PolylineCurve(polyline.GetCoordinates().ToRhino());
+            var p = polyline.ToRhino();
 
             if (scaleFactor != 1.0)
               p?.Scale(scaleFactor);
 
             yield return p;
             break;
+          }
         }
       }
     }
@@ -888,6 +1046,28 @@ namespace RhinoInside.Revit
     public static Autodesk.Revit.DB.Line ToHost(this Rhino.Geometry.Line line)
     {
       return Autodesk.Revit.DB.Line.CreateBound(line.From.ToHost(), line.To.ToHost());
+    }
+
+    public static Autodesk.Revit.DB.Arc ToHost(this Rhino.Geometry.Arc arc)
+    {
+      if (arc.IsCircle)
+        return Autodesk.Revit.DB.Arc.Create(arc.Plane.ToHost(), arc.Radius, 0.0, 2.0 * Math.PI);
+      else
+        return Autodesk.Revit.DB.Arc.Create(arc.StartPoint.ToHost(), arc.EndPoint.ToHost(), arc.MidPoint.ToHost());
+    }
+
+    public static Autodesk.Revit.DB.Arc ToHost(this Rhino.Geometry.Circle circle)
+    {
+      return Autodesk.Revit.DB.Arc.Create(circle.Plane.ToHost(), circle.Radius, 0.0, 2.0 * Math.PI);
+    }
+
+    public static Autodesk.Revit.DB.Curve ToHost(this Rhino.Geometry.Ellipse ellipse)
+    {
+#if REVIT_2018
+      return Autodesk.Revit.DB.Ellipse.CreateCurve(ellipse.Plane.Origin.ToHost(), ellipse.Radius1, ellipse.Radius2, ellipse.Plane.XAxis.ToHost(), ellipse.Plane.YAxis.ToHost(), 0.0, 2.0 * Math.PI);
+#else
+      return Autodesk.Revit.DB.Ellipse.Create(ellipse.Plane.Origin.ToHost(), ellipse.Radius1, ellipse.Radius2, ellipse.Plane.XAxis.ToHost(), ellipse.Plane.YAxis.ToHost(), 0.0, 2.0 * Math.PI);
+#endif
     }
 
     public static Autodesk.Revit.DB.Plane ToHost(this Rhino.Geometry.Plane plane)
@@ -956,68 +1136,58 @@ namespace RhinoInside.Revit
         yield return Autodesk.Revit.DB.Point.Create(ToHost(p.Location));
     }
 
-    public static Autodesk.Revit.DB.Line ToHost(this Rhino.Geometry.LineCurve line)
+    public static Autodesk.Revit.DB.Line ToHost(this Rhino.Geometry.LineCurve curve)
     {
-      return Autodesk.Revit.DB.Line.CreateBound(line.PointAtStart.ToHost(), line.PointAtEnd.ToHost());
+      return curve.Line.ToHost();
     }
 
-    public static Autodesk.Revit.DB.Arc ToHost(this Rhino.Geometry.ArcCurve arc)
+    public static Autodesk.Revit.DB.Arc ToHost(this Rhino.Geometry.ArcCurve curve)
     {
-      if (arc.IsClosed)
-        return Autodesk.Revit.DB.Arc.Create(arc.Arc.Plane.ToHost(), arc.Arc.Radius, 0.0, 2.0 * Math.PI);
-      else
-        return Autodesk.Revit.DB.Arc.Create(arc.Arc.StartPoint.ToHost(), arc.Arc.EndPoint.ToHost(), arc.Arc.MidPoint.ToHost());
+      return curve.Arc.ToHost();
     }
 
     public static IEnumerable<Autodesk.Revit.DB.Curve> ToHost(this Rhino.Geometry.Curve curve)
     {
-      var curveTolerance = Revit.ShortCurveTolerance;
-      if (curve.IsShort(curveTolerance))
-      {
-        Debug.WriteLine($"Ignoring short {curve.GetType().Name} (Length = {curve.GetLength()})", "RhinoInside.Revit.Convert");
-        yield break;
-      }
-
       switch (curve)
       {
         case Rhino.Geometry.LineCurve line:
 
-          yield return line.ToHost();
-          break;
+          yield return line.Line.ToHost();
+          yield break;
 
         case Rhino.Geometry.PolylineCurve polyline:
 
           for (int p = 1; p < polyline.PointCount; ++p)
             yield return Autodesk.Revit.DB.Line.CreateBound(polyline.Point(p - 1).ToHost(), polyline.Point(p).ToHost());
-          break;
+          yield break;
 
         case Rhino.Geometry.ArcCurve arc:
 
-          yield return arc.ToHost();
-          break;
+          yield return arc.Arc.ToHost();
+          yield break;
 
         case Rhino.Geometry.PolyCurve polyCurve:
 
           polyCurve.RemoveNesting();
-          polyCurve.RemoveShortSegments(curveTolerance);
+          polyCurve.RemoveShortSegments(Revit.ShortCurveTolerance);
           for (int s = 0; s < polyCurve.SegmentCount; ++s)
           {
             foreach (var segment in polyCurve.SegmentCurve(s).ToHost())
               yield return segment;
           }
-          break;
+          yield break;
 
         case Rhino.Geometry.NurbsCurve nurbsCurve:
 
-          if (nurbsCurve.IsLinear(Revit.VertexTolerance))
+          if (nurbsCurve.TryGetLine(out var lineSegment, Revit.VertexTolerance))
           {
-            yield return Autodesk.Revit.DB.Line.CreateBound(nurbsCurve.PointAtStart.ToHost(), nurbsCurve.PointAtEnd.ToHost());
+            yield return lineSegment.ToHost();
             yield break;
           }
 
           if (nurbsCurve.TryGetPolyline(out var polylineSegment))
           {
-            polylineSegment.ReduceSegments(curveTolerance);
+            polylineSegment.ReduceSegments(Revit.ShortCurveTolerance);
             foreach (var segment in polylineSegment.GetSegments())
               yield return Autodesk.Revit.DB.Line.CreateBound(segment.From.ToHost(), segment.To.ToHost());
 
@@ -1028,21 +1198,17 @@ namespace RhinoInside.Revit
           {
             if (nurbsCurve.TryGetCircle(out var circle, Revit.VertexTolerance))
             {
-              yield return Autodesk.Revit.DB.Arc.Create(circle.Plane.ToHost(), circle.Radius, 0.0, 2.0 * Math.PI);
+              yield return circle.ToHost();
               yield break;
             }
 
             if (nurbsCurve.TryGetEllipse(out var ellipse, Revit.VertexTolerance))
             {
-#if REVIT_2018
-              yield return Autodesk.Revit.DB.Ellipse.CreateCurve(ellipse.Plane.Origin.ToHost(), ellipse.Radius1, ellipse.Radius2, ellipse.Plane.XAxis.ToHost(), ellipse.Plane.YAxis.ToHost(), 0.0, 2.0 * Math.PI);
-#else
-              yield return Autodesk.Revit.DB.Ellipse.Create(ellipse.Plane.Origin.ToHost(), ellipse.Radius1, ellipse.Radius2, ellipse.Plane.XAxis.ToHost(), ellipse.Plane.YAxis.ToHost(), 0.0, 2.0 * Math.PI);
-#endif
+              yield return ellipse.ToHost();
               yield break;
             }
 
-            var simplifiedCurve = curve.Simplify(CurveSimplifyOptions.SplitAtFullyMultipleKnots, curveTolerance, Revit.AngleTolerance);
+            var simplifiedCurve = curve.Simplify(CurveSimplifyOptions.SplitAtFullyMultipleKnots, Revit.VertexTolerance, Revit.AngleTolerance);
             if (simplifiedCurve != null)
             {
               foreach(var simpleCurve in simplifiedCurve.ToHost())
@@ -1053,16 +1219,17 @@ namespace RhinoInside.Revit
             foreach (var segment in nurbsCurve.Split(nurbsCurve.Domain.Mid))
               foreach (var c in segment.ToHost())
                 yield return c;
+            yield break;
           }
           else
           {
             if (nurbsCurve.TryGetArc(out var arcSegment, Revit.VertexTolerance))
             {
-              yield return Autodesk.Revit.DB.Arc.Create(arcSegment.StartPoint.ToHost(), arcSegment.EndPoint.ToHost(), arcSegment.MidPoint.ToHost());
+              yield return arcSegment.ToHost();
               yield break;
             }
 
-            var simplifiedCurve = curve.Simplify(CurveSimplifyOptions.SplitAtFullyMultipleKnots, curveTolerance, Revit.AngleTolerance);
+            var simplifiedCurve = curve.Simplify(CurveSimplifyOptions.SplitAtFullyMultipleKnots, Revit.VertexTolerance, Revit.AngleTolerance);
             if (simplifiedCurve != null)
             {
               foreach (var simpleCurve in simplifiedCurve.ToHost())
@@ -1081,31 +1248,25 @@ namespace RhinoInside.Revit
             Debug.Assert(knots.Count == nurbsCurve.Degree + controlPoints.Count + 1);
 
             Autodesk.Revit.DB.Curve nurbSpline = null;
-            try
+
+            if (nurbsCurve.IsRational)
             {
-              if (nurbsCurve.IsRational)
-              {
-                var weights = nurbsCurve.Points.Select(p => p.Weight).ToList();
-                nurbSpline = NurbSpline.CreateCurve(nurbsCurve.Degree, knots, controlPoints, weights);
-              }
-              else
-              {
-                nurbSpline = NurbSpline.CreateCurve(nurbsCurve.Degree, knots, controlPoints);
-              }
+              var weights = nurbsCurve.Points.Select(p => p.Weight).ToList();
+              nurbSpline = NurbSpline.CreateCurve(nurbsCurve.Degree, knots, controlPoints, weights);
             }
-            catch (Autodesk.Revit.Exceptions.ApplicationException e)
+            else
             {
-              Debug.Fail(e.Source, e.Message);
+              nurbSpline = NurbSpline.CreateCurve(nurbsCurve.Degree, knots, controlPoints);
             }
 
             yield return nurbSpline;
+            yield break;
           }
-          break;
 
         default:
           foreach (var c in curve.ToNurbsCurve().ToHost())
             yield return c;
-          break;
+          yield break;
       }
     }
 
@@ -1132,32 +1293,23 @@ namespace RhinoInside.Revit
         Debug.Assert(knotsV.Count >= 2 * (degreeV + 1));
         Debug.Assert(controlPoints.Count == (knotsU.Count - degreeU - 1) * (knotsV.Count - degreeV - 1));
 
-        try
+        if (nurbsSurface.IsRational)
         {
-          if (nurbsSurface.IsRational)
-          {
-            var weights = nurbsSurface.Points.Select(p => p.Weight).ToList();
+          var weights = nurbsSurface.Points.Select(p => p.Weight).ToList();
 
-            return BRepBuilderSurfaceGeometry.CreateNURBSSurface
-            (
-              degreeU, degreeV, knotsU, knotsV, controlPoints, weights, false, null
-            );
-          }
-          else
-          {
-            return BRepBuilderSurfaceGeometry.CreateNURBSSurface
-            (
-              degreeU, degreeV, knotsU, knotsV, controlPoints, false, null
-            );
-          }
+          return BRepBuilderSurfaceGeometry.CreateNURBSSurface
+          (
+            degreeU, degreeV, knotsU, knotsV, controlPoints, weights, false, null
+          );
         }
-        catch (Autodesk.Revit.Exceptions.ApplicationException e)
+        else
         {
-          Debug.Fail(e.Source, e.Message);
+          return BRepBuilderSurfaceGeometry.CreateNURBSSurface
+          (
+            degreeU, degreeV, knotsU, knotsV, controlPoints, false, null
+          );
         }
       }
-
-      return null;
     }
 
     static Rhino.Geometry.Brep SplitClosedFaces(Rhino.Geometry.Brep brep)
@@ -1461,6 +1613,7 @@ namespace RhinoInside.Revit
         case Autodesk.Revit.DB.Solid s:            yield return s; yield break;
         case Autodesk.Revit.DB.Mesh m:             yield return m; yield break;
         case Autodesk.Revit.DB.GeometryInstance i: yield return i; yield break;
+        default: throw new ArgumentException("DirectShape only supports Point, Curve, Solid, Mesh and GeometryInstance.");
       }
     }
 
@@ -1794,6 +1947,25 @@ namespace RhinoInside.Revit
         return true;
       }
 
+      return false;
+    }
+    #endregion
+
+    #region TryGetLine
+    public static bool TryGetLine(this Rhino.Geometry.Curve curve, out Rhino.Geometry.Line line, double tolerance)
+    {
+      if (curve is LineCurve lineCurve)
+      {
+        line = lineCurve.Line;
+        return true;
+      }
+      else if (curve.IsLinear(tolerance))
+      {
+        line = new Rhino.Geometry.Line(curve.PointAtStart, curve.PointAtEnd);
+        return true;
+      }
+
+      line = default(Rhino.Geometry.Line);
       return false;
     }
     #endregion
