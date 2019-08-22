@@ -18,121 +18,6 @@ using Rhino.Geometry.Collections;
 
 namespace RhinoInside.Revit
 {
-  public static class Extension
-  {
-    #region Curves
-    public static bool IsSameKindAs(this Autodesk.Revit.DB.Curve self, Autodesk.Revit.DB.Curve other)
-    {
-      return self.IsBound == other.IsBound && self.GetType() == other.GetType();
-    }
-    #endregion
-
-    #region Geometry
-    public static Autodesk.Revit.DB.GeometryElement GetGeometry(this Autodesk.Revit.DB.Element element, ViewDetailLevel viewDetailLevel, out Options options)
-    {
-      options = new Options { ComputeReferences = true, DetailLevel = viewDetailLevel };
-      var geometry = element.get_Geometry(options);
-
-      if (!(geometry?.Any() ?? false) && element is GenericForm form && !form.Combinations.IsEmpty)
-      {
-        geometry.Dispose();
-
-        options.IncludeNonVisibleObjects = true;
-        return element.get_Geometry(options);
-      }
-
-      return geometry;
-    }
-    #endregion
-
-    #region Levels
-    public static Autodesk.Revit.DB.Level FindLevelByElevation(this Autodesk.Revit.DB.Document doc, double elevation)
-    {
-      Autodesk.Revit.DB.Level level = null;
-      using (var collector = new FilteredElementCollector(doc))
-      {
-        foreach (var levelN in collector.OfClass(typeof(Level)).ToElements().Cast<Level>().OrderBy(c => c.Elevation))
-        {
-          if (level == null)
-            level = levelN;
-          else if (elevation >= levelN.Elevation)
-            level = levelN;
-        }
-      }
-      return level;
-    }
-    #endregion
-
-    #region Parameters
-    public enum ParameterSource
-    {
-      Any,
-      BuiltIn,
-      Project,
-      Shared
-    }
-
-    public static IEnumerable<Autodesk.Revit.DB.Parameter> GetParameters(this Autodesk.Revit.DB.Element element, ParameterSource parameterSource)
-    {
-      switch (parameterSource)
-      {
-        case ParameterSource.Any:
-          return Enum.GetValues(typeof(BuiltInParameter)).
-            Cast<BuiltInParameter>().
-            Select(x => element.get_Parameter(x)).
-            Where(x => x?.HasValue ?? false).
-            Union(element.Parameters.Cast<Autodesk.Revit.DB.Parameter>()).
-            GroupBy(x => x.Id).
-            Select(x => x.First());
-        case ParameterSource.BuiltIn:
-          return Enum.GetValues(typeof(BuiltInParameter)).
-            Cast<BuiltInParameter>().
-            GroupBy(x => x).
-            Select(x => x.First()).
-            Select(x => element.get_Parameter(x)).
-            Where(x => x?.HasValue ?? false);
-        case ParameterSource.Project:
-          return element.Parameters.Cast<Autodesk.Revit.DB.Parameter>().
-            Where(p => !p.IsShared);
-        case ParameterSource.Shared:
-          return element.Parameters.Cast<Autodesk.Revit.DB.Parameter>().
-            Where(p => p.IsShared);
-      }
-
-      return Enumerable.Empty<Autodesk.Revit.DB.Parameter>();
-    }
-
-    public static void CopyParametersFrom(this Autodesk.Revit.DB.Element to, Autodesk.Revit.DB.Element from, ICollection<BuiltInParameter> parametersMask = null)
-    {
-      if (from != null && to != null)
-      {
-        foreach (var previousParameter in from.GetParameters(ParameterSource.Any))
-          using (previousParameter)
-          using (var param = to.get_Parameter(previousParameter.Definition))
-          {
-            if (param == null || param.IsReadOnly)
-              continue;
-
-            if (parametersMask != null)
-            if (param.Definition is InternalDefinition internalDefinition)
-            {
-              if (parametersMask.Contains(internalDefinition.BuiltInParameter))
-                continue;
-            }
-
-            switch (previousParameter.StorageType)
-            {
-              case StorageType.Integer:   param.Set(previousParameter.AsInteger()); break;
-              case StorageType.Double:    param.Set(previousParameter.AsDouble()); break;
-              case StorageType.String:    param.Set(previousParameter.AsString()); break;
-              case StorageType.ElementId: param.Set(previousParameter.AsElementId()); break;
-            }
-          }
-      }
-    }
-    #endregion
-  }
-
   public static class Convert
   {
     #region Enums
@@ -398,7 +283,7 @@ namespace RhinoInside.Revit
         var polycurve = new Rhino.Geometry.PolyCurve();
 
         foreach (var curve in loop)
-          polycurve.Append(curve.ToRhino());
+          polycurve.AppendSegment(curve.ToRhino());
 
         yield return polycurve;
       }
@@ -413,7 +298,7 @@ namespace RhinoInside.Revit
     public static Rhino.Geometry.RevSurface ToRhino(this Autodesk.Revit.DB.ConicalSurface surface, Interval interval)
     {
       var plane = new Rhino.Geometry.Plane(surface.Origin.ToRhino(), (Vector3d) surface.XDir.ToRhino(), (Vector3d) surface.YDir.ToRhino());
-      double height = interval.Max;
+      double height = Math.Abs(interval.Min) > Math.Abs(interval.Max) ? interval.Min : interval.Max;
       var cone = new Rhino.Geometry.Cone(plane, height, Math.Tan(surface.HalfAngle) * height);
 
       return cone.ToRevSurface();
@@ -680,12 +565,13 @@ namespace RhinoInside.Revit
               var points = nurbsSurface.Points;
               for (int u = 0; u < controlPointCountU; u++)
               {
-                for (int v = 0; v < controlPointCountU; v++)
+                int u_offset = u * controlPointCountV;
+                for (int v = 0; v < controlPointCountV; v++)
                 {
-                  var pt = controlPoints[u + (v * controlPointCountU)];
+                  var pt = controlPoints[u_offset + v];
                   if (nurbsData.IsRational)
                   {
-                    double w = weights[u + (v * controlPointCountU)];
+                    double w = weights[u_offset + v];
                     points.SetPoint(u, v, pt.X * w, pt.Y * w, pt.Z * w, w);
                   }
                   else
@@ -1367,7 +1253,7 @@ namespace RhinoInside.Revit
       return brep;
     }
 
-    public static IEnumerable<GeometryObject> ToHost(this Rhino.Geometry.Brep brep)
+    public static Autodesk.Revit.DB.Solid ToHost(this Rhino.Geometry.Brep brep)
     {
       Solid solid = null;
 
@@ -1419,7 +1305,7 @@ namespace RhinoInside.Revit
                   if (edgeIds == null)
                   {
                     edgeIds = brepEdges[edge.EdgeIndex] = new List<BRepBuilderGeometryId>();
-                    foreach (var e in edge.ToHost())
+                    foreach (var e in edge.ToHost().SelectMany(x => x.ToBoundedCurves()))
                       edgeIds.Add(builder.AddEdge(BRepBuilderEdgeGeometry.Create(e)));
                   }
 
@@ -1451,19 +1337,6 @@ namespace RhinoInside.Revit
             //Debug.Fail(e.Source, e.Message);
             Debug.WriteLine(e.Message, e.Source);
           }
-
-          if (brepBuilderOutcome == BRepBuilderOutcome.Failure)
-          {
-            Debug.WriteLine("Try exploding the brep and converting face by face.", "RhinoInside.Revit.Convert");
-            if (brep.Faces.Count > 1)
-            {
-              var breps = brep.UnjoinEdges(brep.Edges.Select(x => x.EdgeIndex));
-              foreach (var face in breps.SelectMany(x => x.ToHost()))
-                yield return face;
-
-              yield break;
-            }
-          }
         }
         else
         {
@@ -1471,12 +1344,30 @@ namespace RhinoInside.Revit
         }
       }
 
+      return solid;
+    }
+
+    static IEnumerable<GeometryObject> ToHostMultiple(this Rhino.Geometry.Brep brep)
+    {
+      var solid = brep.ToHost();
       if (solid != null)
       {
         yield return solid;
+        yield break;
+      }
+
+      if (brep.Faces.Count > 1)
+      {
+        Debug.WriteLine("Try exploding the brep and converting face by face.", "RhinoInside.Revit.Convert");
+
+        var breps = brep.UnjoinEdges(brep.Edges.Select(x => x.EdgeIndex));
+        foreach (var face in breps.SelectMany(x => x.ToHostMultiple()))
+          yield return face;
       }
       else
       {
+        Debug.WriteLine("Try meshing the brep.", "RhinoInside.Revit.Convert");
+
         // Emergency result as a mesh
         var mp = MeshingParameters.Default;
         mp.MinimumEdgeLength = Revit.VertexTolerance;
@@ -1516,7 +1407,7 @@ namespace RhinoInside.Revit
 
             var vertices = piece.Vertices.ToPoint3dArray();
 
-            builder.OpenConnectedFaceSet(piece.SolidOrientation() != -1);
+            builder.OpenConnectedFaceSet(piece.SolidOrientation() != 0);
             foreach (var face in piece.Faces)
             {
               faceVertices.Add(vertices[face.A].ToHost());
@@ -1557,28 +1448,28 @@ namespace RhinoInside.Revit
           if (scaleFactor != 1.0)
             point.Scale(scaleFactor);
 
-          return Enumerable.Repeat(point.ToHost(), 1).Cast<GeometryObject>();
+          return Enumerable.Repeat(point.ToHost(), 1);
         case Rhino.Geometry.PointCloud pointCloud:
           pointCloud = (Rhino.Geometry.PointCloud) pointCloud.DuplicateShallow();
 
           if (scaleFactor != 1.0)
             pointCloud.Scale(scaleFactor);
 
-          return pointCloud.ToHost().Cast<GeometryObject>();
+          return pointCloud.ToHost();
         case Rhino.Geometry.Curve curve:
           curve = (Rhino.Geometry.Curve) curve.DuplicateShallow();
 
           if (scaleFactor != 1.0)
             curve.Scale(scaleFactor);
 
-          return curve.ToHost().Cast<GeometryObject>();
+          return curve.ToHost();
         case Rhino.Geometry.Brep brep:
           brep = (Rhino.Geometry.Brep) brep.DuplicateShallow();
 
           if (scaleFactor != 1.0)
             brep.Scale(scaleFactor);
 
-          return brep.ToHost().Cast<GeometryObject>();
+          return brep.ToHostMultiple();
         case Rhino.Geometry.Mesh mesh:
           mesh = (Rhino.Geometry.Mesh) mesh.DuplicateShallow();
 
@@ -1587,7 +1478,7 @@ namespace RhinoInside.Revit
 
           while (mesh.CollapseFacesByEdgeLength(false, Revit.VertexTolerance) > 0) ;
 
-          return mesh.ToHost().Cast<GeometryObject>();
+          return mesh.ToHost();
         default:
           return Enumerable.Empty<GeometryObject>();
       }

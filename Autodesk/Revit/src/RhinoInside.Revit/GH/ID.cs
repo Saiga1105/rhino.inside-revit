@@ -68,24 +68,24 @@ namespace RhinoInside.Revit.GH.Types
 
     public override bool CastTo<Q>(ref Q target)
     {
+      if (typeof(Q).IsAssignableFrom(typeof(Autodesk.Revit.DB.ElementId)))
+      {
+        target = (Q) (object) Value;
+        return true;
+      }
       if (typeof(Q).IsAssignableFrom(typeof(GH_Guid)))
       {
         target = (Q) (object) new GH_Guid(ReferenceID);
         return true;
       }
-      if (typeof(Q).IsAssignableFrom(typeof(GH_Integer)))
+      if(typeof(Q).IsAssignableFrom(typeof(GH_Integer)))
       {
         target = (Q) (object) new GH_Integer(Value.IntegerValue);
         return true;
       }
-      if (typeof(Q).IsAssignableFrom(typeof(GH_String)))
+      if(typeof(Q).IsAssignableFrom(typeof(GH_String)))
       {
         target = (Q) (object) new GH_String(UniqueID);
-        return true;
-      }
-      if (target is ElementId)
-      {
-        target = (Q) (object) Value;
         return true;
       }
 
@@ -264,6 +264,11 @@ namespace RhinoInside.Revit.GH.Parameters
 
 namespace RhinoInside.Revit.GH.Components
 {
+  public interface IGH_PersistentElementComponent
+  {
+    bool NeedsToBeExpired(Autodesk.Revit.DB.Events.DocumentChangedEventArgs args);
+  }
+
   public abstract class GH_Component : Grasshopper.Kernel.GH_Component
   {
     protected GH_Component(string name, string nickname, string description, string category, string subCategory)
@@ -273,6 +278,8 @@ namespace RhinoInside.Revit.GH.Components
     public override bool IsBakeCapable => Params?.Output.OfType<IGH_BakeAwareObject>().Where(x => x.IsBakeCapable).Any() ?? false;
 
     protected override Bitmap Icon => ((Bitmap) Properties.Resources.ResourceManager.GetObject(GetType().Name)) ??
-                                      ImageBuilder.BuildIcon(GetType().Name.Substring(0, 1));
+                                      ImageBuilder.BuildIcon(IconTag);
+
+    protected virtual string IconTag => GetType().Name.Substring(0, 1);
   }
 }
