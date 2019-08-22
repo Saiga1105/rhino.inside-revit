@@ -1,22 +1,27 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Runtime.InteropServices;
+using RhinoInside.Runtime.InteropServices;
 using Autodesk.Revit.DB;
-using Autodesk.Revit.DB.PointClouds;
 using Grasshopper.Kernel;
+
+using Autodesk.Revit.DB.PointClouds;
 using Rhino.Geometry;
 using Volvox_Cloud;
 
-namespace RhinoInside.GH.Element.PointCloud
-{
-  class GetPointCloud
-  {
-  }
-}
+//namespace RhinoInside.GH.Element.PointCloud
+//{
+//  class GetPointCloud
+//  {
+//  }
+//}
 
 
 namespace RhinoInside.Revit.GH.Components
 {
-  public class GetPointCloud : GH_TransactionalComponentItem
+  public class GetPointCloud : GH_Component
   {
     public override Guid ComponentGuid => new Guid("37A8C46F-CB5B-49FD-A483-B03D1FE14A24");
     public override GH_Exposure Exposure => GH_Exposure.primary;

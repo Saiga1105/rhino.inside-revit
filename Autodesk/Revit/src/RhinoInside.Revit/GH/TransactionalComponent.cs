@@ -687,6 +687,14 @@ namespace RhinoInside.Revit.GH.Components
     {
       Params.Output[0].Phase = GH_SolutionPhase.Failed;
     }
+    protected override void RegisterInputParams(GH_InputParamManager manager)
+    {
+      //manager.AddGeometryParameter("Revit_PointCloud", "R_PCD", string.Empty, GH_ParamAccess.item); manager[0].Optional = false;
+      manager[manager.AddParameter(new Parameters.Element(), "Revit Point Cloud Instance", "R_PCD", string.Empty, GH_ParamAccess.item)].Optional = false;
+
+      manager.AddNumberParameter("averageDistance", "d", string.Empty, GH_ParamAccess.item, 0.01); manager[1].Optional = true;
+      manager.AddIntegerParameter("numPoints", "n", string.Empty, GH_ParamAccess.item, 999999); manager[2].Optional = true;
+    }
     #endregion
   }
 

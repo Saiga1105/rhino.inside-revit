@@ -164,6 +164,7 @@
   </Choose>
   <ItemGroup>
     <Compile Include="GH\Element\PointCloud\GetPointCloud.cs" />
+    <Compile Include="GH\Element\PointCloud\GetPointCloudElement.cs" />
     <Compile Include="GH\Guest.cs" />
     <Compile Include="GH\PreviewServer.cs" />
     <Compile Include="GH\ID.cs" />
