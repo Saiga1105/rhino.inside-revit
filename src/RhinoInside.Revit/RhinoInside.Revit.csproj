@@ -114,6 +114,9 @@
     <Reference Include="System.Core">
       <RequiredTargetFramework>4.0</RequiredTargetFramework>
     </Reference>
+    <Reference Include="Volvox_Cloud">
+      <HintPath>..\..\..\AllBuild\Volvox_Cloud.dll</HintPath>
+    </Reference>
     <Reference Include="WindowsBase" />
     <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="PresentationCore" />
@@ -177,6 +180,8 @@
     <Compile Include="Extensions\WinForms.cs" />
     <Compile Include="GH\Attributes.cs" />
     <Compile Include="GH\Components\ElementPassport.cs" />
+    <Compile Include="GH\Components\GetPointCloud.cs" />
+    <Compile Include="GH\Components\GetPointCloudElement.cs" />
     <Compile Include="GH\Enum.cs" />
     <Compile Include="GH\Guest.cs" />
     <Compile Include="GH\PreviewServer.cs" />
