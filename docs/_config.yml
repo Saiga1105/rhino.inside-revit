@@ -13,9 +13,12 @@ repo_url: "https://github.com/mcneel/rhino.inside-revit/"
 editme_github_base_url: "blob/master/docs/"
 # full url: repo_url + metawiki_url
 metawiki_url: "tree/master/docs/readme.md"
+foodrhino_url: "https://www.food4rhino.com/app/rhinoinside-autodesk-revit"
 
 # forum url
 forum_url: "https://discourse.mcneel.com/c/rhino-inside/Revit"
+# link to a search filter, listing interesting posts on the forum
+forum_wiki_posts_url: "https://discourse.mcneel.com/search?expanded=true&q=%23rhino-inside%3ARevit%20in%3Awiki"
 
 # copyright notice (copyright year is dynamic)
 copyright: Robert McNeel & Associates. All Rights Reserved.
@@ -49,9 +52,11 @@ encoding: utf-8
 markdown: kramdown
 kramdown:
   input: GFM
+  syntax_highlighter: rouge
+highlighter: rouge
 # this directory is the root for all collections
 collections_dir: pages
-simple_search: http://google.com/search
+simple_search: https://google.com/search
 
 # activate to test from other devices on the network
 # host: 0.0.0.0
@@ -97,6 +102,10 @@ defaults:
       path: ""
     values:
       layout: ltr/page-list-toc
+      # assume a large order for all pages so unorderd pages get sorted last
+      order: 9999
+      # assume all pages can be listed on table of contents
+      toc: true
 
   # set base metadata for all pages in each collection
   - scope:
@@ -132,3 +141,8 @@ defaults:
       path: "pages/*/*/samples"
     values:
       categories: ['samples']
+
+  - scope:
+      path: "pages/*/*/community"
+    values:
+      categories: ['community']

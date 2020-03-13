@@ -10,6 +10,7 @@
     - [Installing Jekyll](#installing-jekyll)
     - [Building the Wiki using Jekyll](#building-the-wiki-using-jekyll)
     - [Make Necessary Changes](#make-necessary-changes)
+    - [Spell Check](#spell-check)
     - [Publishing the Changes](#publishing-the-changes)
 - [Online Experience](#online-experience)
 - [Understanding Wiki Source Files](#understanding-wiki-source-files)
@@ -17,20 +18,30 @@
   - [Page Layouts](#page-layouts)
   - [Adding a New Language](#adding-a-new-language)
   - [Adding a New Wiki Version](#adding-a-new-wiki-version)
+  - [Adding Button-Specific Documentation](#adding-button-specific-documentation)
   - [Adding Component-Specific Documentation](#adding-component-specific-documentation)
+  - [Adding Release Notes](#adding-release-notes)
 - [Wiki Formatting Conventions](#wiki-formatting-conventions)
   - [Frequently User Terms](#frequently-user-terms)
   - [Linking Other Pages](#linking-other-pages)
   - [Linking Images](#linking-images)
   - [Grasshopper Screenshots](#grasshopper-screenshots)
   - [Linking Videos](#linking-videos)
+  - [Adding Email Links](#adding-email-links)
   - [Pre-defined Blocks](#pre-defined-blocks)
     - [Work-in-Progress Block](#work-in-progress-block)
     - [Revit API Link Block](#revit-api-link-block)
     - [Warning Note Block](#warning-note-block)
+    - [GitHub Issue Note Block](#github-issue-note-block)
+    - [Bubble Note Block](#bubble-note-block)
     - [API Note Block](#api-note-block)
     - [Locale Note Block](#locale-note-block)
+    - [Download Package Block](#download-package-block)
+    - [Download Component Block](#download-component-block)
     - [Release Header Block](#release-header-block)
+    - [Keyboard Key (Inline)](#keyboard-key-inline)
+    - [Keyboard Shortcut Block](#keyboard-shortcut-block)
+- [Sample Pages](#sample-pages)
 - [Data Sources](#data-sources)
   - [Rhinoceros Tab Button List](#rhinoceros-tab-button-list)
   - [Grasshopper Component List](#grasshopper-component-list)
@@ -173,6 +184,10 @@ Shutdown the server by pressing CTRL-C in terminal.
 
 Now you can make the necessary changes to the Wiki pages
 
+### Spell Check
+
+This Wiki has been edited using VSCode with ***Spell Right*** extension for spell checking. There is a spell check dictionary under `.vscode/` directory named `spellright.dict` and contains the excluded words and phrases for the spell check extension.
+
 ### Publishing the Changes
 
 Once you are done with your changes, submit a pull-request through GitHub. If you don't have write access to the repo, an author will review your pull-request and will merge or comment. Please follow the pull-request until your changes are completely merged into the master.
@@ -215,6 +230,7 @@ The structure of the source is as explained below:
 - `static/` contains all static files
   - `images/` contains all images used across the wiki contents
   - `samples/` contains sample data files
+  - `ghnodes/` contains Grasshopper component files
 - `_data/` contains data files used to generate special pages
 - `_config.yml` Jekyll site configs file (see the config file for more information on each available setting)
 - `GemFile*` Ruby gemfile listing the ruby dependencies
@@ -235,11 +251,12 @@ order: 2
 Required metadata are
 
 - **Title**
-- **Order** (if page is part of a list of similar content e.g. `samples/`)
+- **Order** set the order only for sections that have ordered articles e.g. Guides
 - **Language** Set automatically by site configuration. do not set manually
 - **Version** Set automatically by site configuration. do not set manually
 - **Category** Set automatically by site configuration. do not set manually
 - **Layout** Default layout is set automatically by site configuration. override only when your page layout is different from default. See site config file for default layout
+- **TOC** All pages are set to `toc: true` so they will be included in Side panels. Set to `toc: false` to omit the page from side panel lists e.g. samples/index.md` is omitted from the side panel this way.
 
 ## Page Layouts
 
@@ -333,6 +350,21 @@ Jekyll site config file automatically sets the correct layout and categories on 
 
 Copy the wiki contents from the previous version to this directory and edit the pages as desired.
 
+## Adding Button-Specific Documentation
+
+Each button can have its own documentation page. The contents of this page is inserted after the button name and information, on the button reference list. To create a new button documentation page, create a markdown file under the `pages/<language>/<version>/reference/buttons/` and set the name of the file to the title of the button.
+
+For example page `pages/_en/beta/reference/buttons/Rhino.md` contains the English (`_en`) docs for the `beta` version of the button with title `Rhino` which is the main Rhino button in the interface.
+
+Make sure to provide the minimum metadata for button-specific pages. See below. Notice that `toc: false` to avoid listing these pages in side panels.
+
+```
+---
+title: Rhino Button
+toc: false
+---
+```
+
 ## Adding Component-Specific Documentation
 
 Each component can have its own documentation page. The contents of this page is inserted after the component name and information, on the component reference list. To create a new component documentation page, create a markdown file under the `pages/<language>/<version>/reference/components/` and set the name of the file to the UUID of the component.
@@ -340,6 +372,24 @@ Each component can have its own documentation page. The contents of this page is
 For example page `pages/_en/beta/reference/components/273ff43d-b771-4eb7-a66d-5da5f7f2731e.md` contains the English (`_en`) docs for the `beta` version of the component with UUID `273ff43d-b771-4eb7-a66d-5da5f7f2731e` which is the `Material.ByColor` component.
 
 These component-specific pages can be directly access as well. For example the component page discussed above can also be directly accessed through `http://.../en/beta/reference/components/273ff43d-b771-4eb7-a66d-5da5f7f2731e`
+
+Make sure to provide the minimum metadata for component-specific pages. See below. Notice that `toc: false` to avoid listing these pages in side panels.
+
+```
+---
+title: Material.ByColor
+toc: false
+---
+```
+
+## Adding Release Notes
+
+Follow the steps below to add new release notes. Most recent release should be on top:
+
+- Open the Reference / Release Notes page
+- Copy the release notes block from previous release and add the new build info to `version=` and `time=` attributes
+- Write down a list of notes related to the release
+- Add images if necessary. Place images under `static/images/release_notes` and name by the release e.g. `0073256343_01.png` is the first image (`_01.png`) for release `0073256343`
 
 # Wiki Formatting Conventions
 
@@ -368,13 +418,13 @@ You can refer to these terms using liquid tags. Jekyll will automatically place 
 You can use the format below in your pages to point to other pages on the Wiki. Never refer to a page from another Wiki language or version. All the inter-page links should be restricted to pages of the same language and version. This helps keeping the Wiki in clean containers.
 
 ```markdown
-{% link _en/beta/reference/rir-interface.md %}
+{{ site.baseurl }}{% link _en/beta/reference/rir-interface.md %}
 ```
 
 You can combine this with markdown link convention so the link has a title
 
 ```markdown
-[Rhino.Inside.Revit Interface]({% link _en/beta/reference/rir-interface.md %})
+[Rhino.Inside.Revit Interface]({{ site.baseurl }}{% link _en/beta/reference/rir-interface.md %})
 ```
 
 ## Linking Images
@@ -393,7 +443,7 @@ The Kramdown syntax also allows for applying [inline attribute overrides](https:
 
 ## Grasshopper Screenshots
 
-Avoid including the background in Grasshopper screenshots for a more pleasing image. You can use the hi-res screenshot export tool in Grasshopper to generate a PNG with transparent background from your definition.
+When discussing abstract concepts or specific functionality of Grasshopper components or groups of components, avoid including the Grasshopper background in screenshots for a more pleasing image. You can use the hi-res screenshot export tool in Grasshopper to generate a PNG with transparent background from your definition.
 
 For example:
 
@@ -403,10 +453,13 @@ Looks better than:
 
 ![](static/images/readme/bad-gh.png)
 
+It is okay to include the Grasshopper background if the image is about a specific definition or feature. That way, the background can help providing context to the reader. In this case make sure to use the default Grasshopper background. The image below shows a specific part of a definition and has the default Grasshopper background included.
+
+![](static/images/readme/ok-gh.png)
+
 ## Linking Videos
 
 You can use the predefined html fragments to easily add videos to your pages. Currently fragments for YouTube and Vimeo has been implemented under `_includes/`. Each fragment takes the video Id as an argument and imports the necessary html elements into the final rendered page.
-
 
 ```markdown
 {% include youtube_player.html id="DZ4y-ZbBkM" %}
@@ -418,6 +471,27 @@ or for Vimeo,
 {% include vimeo_player.html id="280080233" %}
 ```
 
+For YouTube playlists use:
+
+```markdown
+{% include youtube_list.html id="DZ4y-ZbBkM" %}
+```
+
+## Adding Email Links
+
+Emails links (`mailto:`) need to be obfuscated to avoid crawlers to extract email from the Wiki pages. Use the method described below:
+
+- Open developers tools in your browser.
+- Open JavaScript console tab
+- Create the `mailto:` link string e.g. `mailto:test@website.com?subject=Email Subject`
+- Type in `btoa('put link string here')`
+- Save the result base64 string into `data-dump=` attribute in link format below
+- Change anchor link title (`Email Link Title`) to desired title
+- Place the html anchor element in your page
+
+```html
+<a href="#" data-dump="put generated base64 string here" onfocus="this.href = atob(this.dataset.dump)">Email Link Title</a>
+```
 ## Pre-defined Blocks
 
 There are a couple of pre-defined blocks that you can use in your content by using the `{% include}` tags. These blocks and their usage example are listed below.
@@ -429,11 +503,11 @@ There are a couple of pre-defined blocks that you can use in your content by usi
 ```
 {% capture api_note %}
 
-In Revit API, all the built-in parameters are represented by the {% include api_type.html type='Autodesk.Revit.DB.BuiltInParameter' title='DB.BuiltInParameter' %} enumeration.
+In Revit API, all the built-in parameters are represented by the {% include api_type.html type='Autodesk.Revit.DB.BuiltInParameter' title='DB.BuiltInParameter' %} enumeration
 
 {% endcapture %}
 
-{% include ltr/en/api_note.html note=api_note %}
+{% include ltr/api_note.html note=api_note %}
 ```
 
 
@@ -484,6 +558,37 @@ This block can accept two argument:
 - `note=` for the note message
 - `image=` for the header image above the note
 
+### GitHub Issue Note Block
+
+![](static/images/readme/issue-block.png)
+
+This block is for showing code-related issues on the GitHub repo. Below is an example of using an issue note block:
+
+```
+{% include ltr/issue_note.html issue_id='142' note='Add Views to category pickers so an Element.CategoryFilter can be used to list views' %}
+```
+
+This block can accept two argument:
+
+- `issue_id=` for id of the GitHub issue e.g. `142` in `https://github.com/mcneel/rhino.inside-revit/issues/142`
+- `note=` for the note message
+
+
+### Bubble Note Block
+
+![](static/images/readme/bubble-block.png)
+
+This block is for showing tips in your content. Below is an example of using a bubble note block:
+
+```
+{% include ltr/bubble_note.html note='Note text' %}
+```
+
+This block can accept two argument:
+
+- `note=` for the note message
+- `image=` for the header image above the note
+
 
 ### API Note Block
 
@@ -492,7 +597,7 @@ This block can accept two argument:
 This block is for comments related to the APIs. These notes are usually used to explain how APIs work in specific cases. Below is an example of using an API note block:
 
 ```
-{% include ltr/en/api_note.html note=api_note %}
+{% include ltr/api_note.html note='Note text' %}
 ```
 
 This block can accept two argument:
@@ -507,7 +612,7 @@ This block can accept two argument:
 This block is for comments related to the various languages supported by the host software. Below is an example of using a locale note block:
 
 ```
-{% include ltr/en/locale_note.html note=api_note %}
+{% include ltr/locale_note.html note='Note text' %}
 ```
 
 This block can accept two argument:
@@ -518,8 +623,40 @@ This block can accept two argument:
 This is the code used to generate the example locale block shown in the image above.
 
 ```
-{% include ltr/en/locale_note.html note='Since we are specifying the name of parameter in a specific language, the definition will break if opened on a Revit with a different language. A better way (but a lot less intuitive) is to specify the API integer value of the built-in parameter as input value. You can get this value by converting the DB.BuiltInParameter value to an int in python.' image='/static/images/guides/revit-params06.png' %}
+{% include ltr/locale_note.html note='Since we are specifying the name of parameter in a specific language, the definition will break if opened on a Revit with a different language. A better way (but a lot less intuitive) is to specify the API integer value of the built-in parameter as input value. You can get this value by converting the DB.BuiltInParameter value to an int in python.' image='/static/images/guides/revit-params06.png' %}
 ```
+
+### Download Package Block
+
+![](static/images/readme/dl-pkg.png)
+
+This block is for buttons to download packages (Zip, ...)
+
+```
+{% include ltr/download_pkg.html archive='/static/samples/column-family-along-curve.zip' %}
+```
+
+This block can accept two argument:
+
+- `archive=` link to the downloadable file
+- `title=` for the button title (Optional: defaults to `Download Sample Files`)
+
+
+### Download Component Block
+
+![](static/images/readme/dl-comp.png)
+
+This block is for buttons to download Grasshopper components (GH Clusters, ...)
+
+```
+{% include ltr/download_comp.html archive='/static/clusters/Type Family.ghcluster' name='Type Family' %}
+```
+
+This block can accept two argument:
+
+- `archive=` link to the downloadable file
+- `name=` of the Grasshopper component
+- `panel=` name of the panel in Grasshopper interface formatted as `Tab name > panel name` (Optional: defaults to `Revit > Custom`). Panel name shows up on the note below the button.
 
 ### Release Header Block
 
@@ -533,6 +670,48 @@ This block is release headers on **Release Notes** page. This block can accept t
 ```
 {% include ltr/release-header.html version="0.0.7317.30902" time="1/13/2020 17:10:04" %}
 ```
+
+### Keyboard Key (Inline)
+
+![](static/images/readme/kb-key.png)
+
+This block generates keyboard key images. Use this for showing single keys inline with text. This block has one required argument:
+
+- `key=` keyboard key e.g. `Ctrl`
+
+```
+{% include ltr/kb_key.html key='Ctrl' %}
+```
+
+### Keyboard Shortcut Block
+
+![](static/images/readme/kb-shortcut.png)
+
+This block generates keyboard shortcut images. This block can accept three argument:
+
+- `keys=` key combination for the shortcut following `KEY+KEY...` format e.g. `Ctrl+Shift`
+- `click=` set to `true` to show `+ Click` after the shortcut for keyboard and mouse combinations
+- `note=` a note that appears in front of the shortcut image
+
+```
+{% include ltr/kb_shortcut.html keys='Ctrl' note='Launches Rhino window only' click=true %}
+```
+
+# Sample Pages
+
+To create new sample pages, follow the formatting of `samples/_template.md` page. You can duplicate this page and create your own sample document:
+
+- Keep it short and to the point. This page is ONLY about the sample
+- Include a banner image for the sample. Choose an image size to be consistent with other samples. This banner might be used to show as cover in sample galleries
+- Make sure the sample files are archived as a ZIP file for easy download and organization. Modify the `download_pkg` button block to point to your sample archive
+- Under **Files** section, provide a list of sample files with description. After that provide instructions on how to open the samples
+- Under **Description** section, provide a detailed description of how the sample is structured. Any information about how the generic components work should be included in the Guides and not in sample article. The sample description is intended to help the user understand that specific sample and not the underlying concepts
+- Sample pages are un-ordered. There is no need to define `order:` on page metadata
+- You can set the `authors: [ 'your-name'] ` page metadata and provide your name or handle
+- Only use H3 headers. The sidebar should only list **Files** and **Description** and subsections.
+
+    ![](static/images/readme/samples-sidebar.png)
+
 
 # Data Sources
 

@@ -59,6 +59,7 @@
             $('#cat_guides').attr('href', getPageLink('guides/'));
             $('#cat_samples').attr('href', getPageLink('samples/'));
             $('#cat_reference').attr('href', getPageLink('reference/'));
+            $('#cat_community').attr('href', getPageLink('community/'));
             // mark current navbar category as active
             if (url.endsWith('/getting-started') || url.includes('/getting-started/')) {
                 $('#cat_starting').addClass('active');
@@ -68,12 +69,20 @@
                 $('#cat_samples').addClass('active');
             } else if (url.endsWith('/reference') || url.includes('/reference/')) {
                 $('#cat_reference').addClass('active');
+            } else if (url.endsWith('/community') || url.includes('/community/')) {
+                $('#cat_community').addClass('active');
             }
         </script>
 
         <script>
+            // apply magnificPopup to all images except svg
+            // svg images are graphics and charts and not screenshots
             $(document).ready(function() {
-                $('.side-content img').magnificPopup({
+                // grab all images in side content, filter out svg
+                // then apply magnificPopup
+                $('.side-content img').filter(function(){
+                        return ! $(this).attr('src').endsWith(".svg")
+                    }).magnificPopup({
                     type:'image',
                     zoom: { enabled: true },
                     gallery: { enabled: true },
@@ -84,6 +93,16 @@
                         }
                     });
             });
+        </script>
+
+        <script>
+            // add anchor links that show up when hovering over header
+            (function () {
+                'use strict';
+                anchors.options.placement = 'right';
+                anchors.add('.post-content > h2, .post-content > h3, .post-content > h4, .post-content > h5, .post-content > h6');
+                }
+            )();
         </script>
     </body>
 </html>

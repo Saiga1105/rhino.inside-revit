@@ -27,11 +27,24 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
     cursor: pointer;
 }
 
+[type=button], [type=reset], [type=submit], button {
+    -webkit-appearance: none;
+}
+
+pre {
+    padding: 0px;
+}
+
 /*
     site content ==============================================================
 */
 .container {
     max-width: 1170px;
+}
+
+.row-fluid {
+    display: flex;
+    justify-content: space-between;
 }
 
 /*
@@ -61,8 +74,16 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
 
 /* navigation bar with pages */
 /* github logo on navigation bar */
-.site-nav svg {
+.site-nav img {
     margin-top: -4px;
+}
+
+.site-nav .img-button-title{
+    display: none;
+}
+
+.site-nav .page-link:last-child {
+    margin-left: 10px;
 }
 
 /* page links on navigation bar */
@@ -126,7 +147,7 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
     set the minimum height to the footer does not get
     too close to header or sidebar when page is empty
     */
-    min-height: 35em;
+    min-height: 50em;
 }
 
 .page-content a, .page-content a:hover {
@@ -134,8 +155,11 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
 }
 
 /* full-screen page contents */
-.wide-content img {
+.wide-content {
     display: block;
+}
+
+.wide-content img {
     margin-left: auto;
     margin-right: auto;
     width: 100%;
@@ -143,7 +167,8 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
 
 /* page with sidebar contents */
 .side-content {
-    margin-left: 225px;
+    margin-left: 20px;
+    width: 100%;
 }
 
 .side-content h1 {
@@ -162,16 +187,24 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
     padding-bottom: 10px;
 }
 
+.post-content h3 {
+    margin-bottom: 10px;
+}
+
 /* side bar */
 .sidebar {
-    width: 215px;
-    position: fixed;
+    position: sticky;
+    top: 90px;
+    height: 100%;
 }
 
 .sidebar ul {
     list-style: none;
     padding-left: 0;
     margin-left: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: calc(100vh - 8em);
 }
 
 .sidebar li, .nav li {
@@ -186,6 +219,7 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
     font-weight: 400;
     padding: 4px 20px 4px 18px;
     display: block;
+    width: 215px;
 }
 
 .sidebar a:hover, .nav a:hover {
@@ -198,7 +232,7 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
 .sidebar .nav .nav-item .nav a,
 .sidebar nav a {
     margin-left: 20px;
-    font-size: 12px;
+    font-size: 11px;
 }
 
 /* side bar navigation */
@@ -211,6 +245,29 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
 .nav a.active {
     font-weight: bold;
     color: #111;
+}
+
+.error404 {
+    text-align: center;
+}
+
+.scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #e8e8e8 #f9f9f9;
+}
+
+.scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.scrollbar::-webkit-scrollbar-track {
+    background-color: #f9f9f9;
+    border-radius: 3px;
+}
+
+.scrollbar::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background-color: #e8e8e8;
 }
 
 /*
@@ -273,6 +330,10 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
     outline: 1px solid transparent;
 }
 
+.small-image {
+    width: 50%;
+}
+
 /*
     content elements  =========================================================
 */
@@ -283,6 +344,15 @@ a.site-title:hover, a.page-link:hover, a.dropdown-toggle:hover {
 
 .error404 p {
     text-align: center;
+}
+
+.btn {
+    display: inline;
+    padding: 10px 15px 10px 15px;
+}
+
+.rhino-dl {
+    margin-left: 8px;
 }
 
 a.btn-dark {
@@ -308,6 +378,7 @@ a.btn-dark:hover {
 
 .comp-table td.comp-docs-col {
     padding-left: 36px;
+    padding-bottom: 10px;
 }
 
 .comp-table td {
@@ -359,7 +430,8 @@ a.btn-dark:hover {
 
 .msg-block {
     width: 100%;
-    border: 1px solid #d0d0d0;
+    background-color: #f6f6f6;
+    border: none;
     border-radius: 5px;
     margin: 30px 0 30px 0;
 }
@@ -379,9 +451,99 @@ a.btn-dark:hover {
     margin-bottom: 20px;
 }
 
+.msg-msg p {
+    margin-bottom: 0px;
+}
+
+.issue-block {
+    background-color: gold;
+    border: none;
+}
+
 small.build-time {
     text-align: right;
     display: block;
     color: #999;
     margin-top: -5px;
+}
+
+.video-player {
+    margin-bottom: 20px;
+}
+
+img.button-icon {
+    display: inline;
+    width: 24px;
+    height: 24px;
+    margin-top: -4px;
+    margin-left: -4px;
+}
+
+.caption {
+    display: block;
+    color: #828282;
+    font-size: 12px;
+    margin-top: 10px;
+}
+
+.kbshortcut {
+    display: inline;
+    list-style-type: none;
+    margin: 0 0 5px 0;
+    padding: 0;
+}
+
+.kbkey {
+    display: inline-block;
+    margin: 0px;
+    margin-bottom: 3px;
+    padding: 3px 10px 4px 10px;
+    color: #fff;
+    background: linear-gradient(225deg, #2f2f2f, #828282);
+    border: none;
+    border-radius: 3px;
+    font-size: 1rem;
+    line-height: 1.3;
+    text-align: center;
+    vertical-align: middle;
+    box-shadow: 2px 2px 0 rgba(30, 30, 30, 0.2),0 0 0 2px #575757 inset;
+}
+
+.kbshortcut li:not(:first-child) {
+    margin-left: 22px;
+}
+
+.kbshortcut li:not(:first-child)::before {
+    content: "+";
+    display: inline-block;
+    color: #4b4e51;
+    background: none;
+    margin-left: -30px;
+    padding-right: 15px;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.kbclick {
+    content: "+";
+    display: inline-block;
+    background: none;
+    margin-left: -30px;
+    padding-right: 15px;
+    font-size: 1.2rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.kbnote, .kbnote p {
+    display: inline-block;
+    height: 26px;
+    vertical-align: text-top;
+    margin: 0;
+}
+
+.kbnote-heavy {
+    font-weight: 600;
+    color: #4b4e51;
 }

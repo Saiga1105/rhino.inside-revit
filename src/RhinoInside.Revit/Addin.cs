@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Windows;
 using System.Windows.Input;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -22,8 +23,36 @@ namespace RhinoInside.Revit
     Scripting = 3
   }
 
-  public class Addin : IExternalApplication
+  public class Addin : External.UI.Application
   {
+    #region Status
+    internal enum Status
+    {
+      Crashed       = int.MinValue,     // Loaded and crashed
+      Failed        = int.MinValue + 1, // Failed to load
+      Obsolete      = int.MinValue + 2, // Rhino.Inside is obsolete version
+      Expired       = int.MinValue + 3, // License is expired
+
+      Unavailable   = 0,                // Not installed or not supported version
+      Available     = 1,                // Available to load
+      Ready         = int.MaxValue,     // Fully functional
+    }
+    static Status status = default;
+
+    internal static Status CurrentStatus
+    {
+      get =>  status;
+
+      set
+      {
+        if (status < Status.Available && value > status)
+          throw new ArgumentException();
+
+        status = value;
+      }
+    }
+    #endregion
+
     #region StartupMode
     static AddinStartupMode GetStartupMode()
     {
@@ -38,14 +67,14 @@ namespace RhinoInside.Revit
     internal static readonly AddinStartupMode StartupMode = GetStartupMode();
     #endregion
 
-    #region Static constructor
+    #region Constructor
     static readonly string SystemDir =
       Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\McNeel\Rhinoceros\7.0\Install", "Path", null) as string ??
       Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Rhino WIP", "System");
 
     internal static readonly string RhinoExePath = Path.Combine(SystemDir, "Rhino.exe");
-    internal static readonly FileVersionInfo RhinoVersionInfo = File.Exists(RhinoExePath) ? FileVersionInfo.GetVersionInfo(RhinoExePath) : null ;
-    static readonly Version MinimumRhinoVersion = new Version(7, 0, 19344);
+    internal static readonly FileVersionInfo RhinoVersionInfo = File.Exists(RhinoExePath) ? FileVersionInfo.GetVersionInfo(RhinoExePath) : null;
+    static readonly Version MinimumRhinoVersion = new Version(7, 0, 20056);
     static readonly Version RhinoVersion = new Version
     (
       RhinoVersionInfo?.FileMajorPart ?? 0,
@@ -56,44 +85,66 @@ namespace RhinoInside.Revit
 
     static Addin()
     {
-      ResolveEventHandler OnRhinoCommonResolve = null;
-      AppDomain.CurrentDomain.AssemblyResolve += OnRhinoCommonResolve = (sender, args) =>
+      if (StartupMode == AddinStartupMode.Cancelled)
+        return;
+
+      if (RhinoVersion >= MinimumRhinoVersion)
+        status = Status.Available;
+
+      if (DaysUntilExpiration < 1)
+        status = Status.Obsolete;
+
+      if (CurrentStatus == Status.Available)
       {
-        const string rhinoCommonAssemblyName = "RhinoCommon";
-        var assemblyName = new AssemblyName(args.Name).Name;
+        ResolveEventHandler OnRhinoCommonResolve = null;
+        AppDomain.CurrentDomain.AssemblyResolve += OnRhinoCommonResolve = (sender, args) =>
+        {
+          const string rhinoCommonAssemblyName = "RhinoCommon";
+          var assemblyName = new AssemblyName(args.Name).Name;
 
-        if (assemblyName != rhinoCommonAssemblyName)
-          return null;
+          if (assemblyName != rhinoCommonAssemblyName)
+            return null;
 
-        AppDomain.CurrentDomain.AssemblyResolve -= OnRhinoCommonResolve;
-        return Assembly.LoadFrom(Path.Combine(SystemDir, rhinoCommonAssemblyName + ".dll"));
-      };
+          AppDomain.CurrentDomain.AssemblyResolve -= OnRhinoCommonResolve;
+          return Assembly.LoadFrom(Path.Combine(SystemDir, rhinoCommonAssemblyName + ".dll"));
+        };
+      }
     }
+
+    public Addin() : base(new Guid("02EFF7F0-4921-4FD3-91F6-A87B6BA9BF74")) { }
     #endregion
 
     #region IExternalApplication Members
-    Result IExternalApplication.OnStartup(UIControlledApplication applicationUI)
+    internal static UIControlledApplication ApplicationUI { get; private set; }
+
+    protected override Result OnStartup(UIControlledApplication applicationUI)
     {
       if (StartupMode == AddinStartupMode.Cancelled)
         return Result.Cancelled;
 
       ApplicationUI = applicationUI;
 
-      EventHandler<ApplicationInitializedEventArgs> applicationInitialized = null;
-      ApplicationUI.ControlledApplication.ApplicationInitialized += applicationInitialized = (sender, args) =>
+      if (applicationUI.IsLateAddinLoading)
       {
-        ApplicationUI.ControlledApplication.ApplicationInitialized -= applicationInitialized;
-        Revit.ActiveUIApplication = new UIApplication(sender as Autodesk.Revit.ApplicationServices.Application);
-
-        if (StartupMode < AddinStartupMode.AtStartup)
-          return;
-
-        if (Revit.OnStartup(Revit.ApplicationUI) == Result.Succeeded)
+        EventHandler<Autodesk.Revit.UI.Events.IdlingEventArgs> applicationIdling = null;
+        ApplicationUI.Idling += applicationIdling = (sender, args) =>
         {
-          if (StartupMode == AddinStartupMode.Scripting)
-            Revit.ActiveUIApplication.PostCommand(RevitCommandId.LookupPostableCommandId(PostableCommand.ExitRevit));
-        }
-      };
+          if (sender is UIApplication app)
+          {
+            ApplicationUI.Idling -= applicationIdling;
+            DoStartUp(app.Application);
+          }
+        };
+      }
+      else
+      {
+        EventHandler<ApplicationInitializedEventArgs> applicationInitialized = null;
+        ApplicationUI.ControlledApplication.ApplicationInitialized += applicationInitialized = (sender, args) =>
+        {
+          ApplicationUI.ControlledApplication.ApplicationInitialized -= applicationInitialized;
+          DoStartUp(sender as Autodesk.Revit.ApplicationServices.Application);
+        };
+      }
 
       // Add launch RhinoInside push button
       UI.CommandRhinoInside.CreateUI(applicationUI.CreateRibbonPanel("Rhinoceros"));
@@ -101,19 +152,82 @@ namespace RhinoInside.Revit
       return Result.Succeeded;
     }
 
-    Result IExternalApplication.OnShutdown(UIControlledApplication applicationUI)
+    void DoStartUp(Autodesk.Revit.ApplicationServices.Application app)
+    {
+      Revit.ActiveUIApplication = new UIApplication(app);
+
+      if (StartupMode < AddinStartupMode.AtStartup)
+        return;
+
+      if (Revit.OnStartup(Revit.ApplicationUI) == Result.Succeeded)
+      {
+        if (StartupMode == AddinStartupMode.Scripting)
+          Revit.ActiveUIApplication.PostCommand(RevitCommandId.LookupPostableCommandId(PostableCommand.ExitRevit));
+      }
+    }
+
+    protected override Result OnShutdown(UIControlledApplication applicationUI)
     {
       try
       {
         return Revit.OnShutdown(applicationUI);
       }
-      catch (Exception)
+      catch
       {
         return Result.Failed;
       }
       finally
       {
         ApplicationUI = null;
+      }
+    }
+
+    public override bool CatchException(Exception e, UIApplication app, object sender)
+    {
+      // There is a wild pointer somewhere, is better to close Revit.
+      bool fatal = e is AccessViolationException;
+
+      if (fatal)
+        CurrentStatus = Status.Crashed;
+
+      var RhinoInside_dmp = Path.Combine
+      (
+        Path.GetDirectoryName(app.Application.RecordingJournalFilename),
+        Path.GetFileNameWithoutExtension(app.Application.RecordingJournalFilename) + ".RhinoInside.Revit.dmp"
+      );
+
+      return MiniDumper.Write(RhinoInside_dmp);
+    }
+
+    public override void ReportException(Exception e, UIApplication app, object sender)
+    {
+      if (MessageBox.Show
+      (
+        caption: $"{app.ActiveAddInId.GetAddInName()} {Version} - Oops! Something went wrong :(",
+        icon: MessageBoxImage.Error,
+        messageBoxText: $"'{e.GetType().FullName}' at {e.Source}." + Environment.NewLine +
+                        Environment.NewLine + e.Message + Environment.NewLine +
+                        Environment.NewLine + "Do you want to report this problem by email to tech@mcneel.com?",
+        button: MessageBoxButton.YesNo,
+        defaultResult: MessageBoxResult.Yes
+      ) == MessageBoxResult.Yes)
+      {
+        var RhinoInside_dmp = Path.Combine
+        (
+          Path.GetDirectoryName(app.Application.RecordingJournalFilename),
+          Path.GetFileNameWithoutExtension(app.Application.RecordingJournalFilename) + ".RhinoInside.Revit.dmp"
+        );
+
+        ErrorReport.SendEmail
+        (
+          app,
+          false,
+          new string[]
+          {
+            app.Application.RecordingJournalFilename,
+            RhinoInside_dmp
+          }
+        );
       }
     }
     #endregion
@@ -126,9 +240,9 @@ namespace RhinoInside.Revit
 
       using
       (
-        var taskDialog = new TaskDialog(MethodBase.GetCurrentMethod().DeclaringType.FullName)
+        var taskDialog = new TaskDialog("Days left")
         {
-          Title = "Days left",
+          Id = $"{MethodBase.GetCurrentMethod().DeclaringType}.{MethodBase.GetCurrentMethod().Name}",
           MainIcon = TaskDialogIcons.IconInformation,
           TitleAutoPrefix = true,
           AllowCancellation = true,
@@ -155,9 +269,9 @@ namespace RhinoInside.Revit
 
       using
       (
-        var taskDialog = new TaskDialog(MethodBase.GetCurrentMethod().DeclaringType.FullName)
+        var taskDialog = new TaskDialog("Update Rhino")
         {
-          Title = "Update Rhino",
+          Id = $"{MethodBase.GetCurrentMethod().DeclaringType}.{MethodBase.GetCurrentMethod().Name}",
           MainIcon = TaskDialogIcons.IconInformation,
           AllowCancellation = true,
           MainInstruction = "Unsupported Rhino WIP version",
@@ -186,7 +300,7 @@ namespace RhinoInside.Revit
         }
       }
 
-      return Result.Failed;
+      return Result.Cancelled;
     }
 
     static string CallerFilePath([System.Runtime.CompilerServices.CallerFilePath] string CallerFilePath = "") => CallerFilePath;
@@ -197,23 +311,20 @@ namespace RhinoInside.Revit
     public static DateTime BuildDate => new DateTime(2000, 1, 1).AddDays(Version.Build).AddSeconds(Version.Revision * 2);
     public static string DisplayVersion => $"{Version} ({BuildDate})";
     #endregion
-
-    internal static UIControlledApplication ApplicationUI { get; private set; }
   }
 }
 
 namespace RhinoInside.Revit.UI
 {
   [Transaction(TransactionMode.Manual), Regeneration(RegenerationOption.Manual)]
-  class CommandRhinoInside : ExternalCommand
+  class CommandRhinoInside : Command
   {
     static PushButton Button;
     public static void CreateUI(RibbonPanel ribbonPanel)
     {
       const string CommandName = "Rhino";
-      const string Shortcuts = "R#Ctrl+R";
 
-      var buttonData = NewPushButtonData<CommandRhinoInside, AllwaysAvailable>(CommandName);
+      var buttonData = NewPushButtonData<CommandRhinoInside, Availability>(CommandName);
       if (ribbonPanel.AddItem(buttonData) is PushButton pushButton)
       {
         Button = pushButton;
@@ -249,209 +360,221 @@ namespace RhinoInside.Revit.UI
         }
         else
         {
-          RegisterShortcut("Add-Ins", ribbonPanel.Name, typeof(CommandRhinoInside).Name, CommandName, Shortcuts);
-        }
-      }
-    }
-
-    static void RegisterShortcut(string tabName, string panelName, string commandId, string commandName, string commandShortcuts)
-    {
-      commandId = $"CustomCtrl_%CustomCtrl_%{tabName}%{panelName}%{commandId}";
-
-      string keyboardShortcutsPath = Path.Combine(Revit.CurrentUsersDataFolderPath, "KeyboardShortcuts.xml");
-      if (!File.Exists(keyboardShortcutsPath))
-        keyboardShortcutsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Autodesk", $"RVT {Revit.ApplicationUI.ControlledApplication.VersionNumber}", "UserDataCache", "KeyboardShortcuts.xml");
-
-      if (!Serialization.KeyboardShortcuts.LoadFrom(keyboardShortcutsPath, out var shortcuts))
-        Serialization.KeyboardShortcuts.LoadFromResources($"RhinoInside.Resources.RVT{Revit.ApplicationUI.ControlledApplication.VersionNumber}.KeyboardShortcuts.xml", out shortcuts);
-
-#if DEBUG
-      // Those lines generate the KeyboardShortcuts.xml template file when new Revit version is supported
-      string keyboardShortcutsTemplatePath = Path.Combine(Addin.SourceCodePath, "Resources", $"RVT{Revit.ApplicationUI.ControlledApplication.VersionNumber}", "KeyboardShortcuts.xml");
-      var info = new FileInfo(keyboardShortcutsTemplatePath);
-      if (info.Length == 0)
-      {
-        var shortcutsSummary = new Serialization.KeyboardShortcuts.Shortcuts();
-        foreach (var shortcutItem in shortcuts.OrderBy(x => x.CommandId))
-        {
-          if (!string.IsNullOrEmpty(shortcutItem.Shortcuts))
-          {
-            var shortcutDefinition = new Serialization.KeyboardShortcuts.ShortcutItem
-            {
-              CommandId = shortcutItem.CommandId,
-              Shortcuts = shortcutItem.Shortcuts
-            };
-            shortcutsSummary.Add(shortcutDefinition);
-          }
-        }
-
-        Serialization.KeyboardShortcuts.SaveAs(shortcutsSummary, keyboardShortcutsTemplatePath);
-      }
-#endif
-
-      try
-      {
-        var shortcutItem = shortcuts.Where(x => x.CommandId == commandId).First();
-        if (shortcutItem.Shortcuts is null)
-        {
-          shortcutItem.Shortcuts = commandShortcuts;
-          Rhinoceros.ModalScope.Exit += ShowShortcutHelp;
-        }
-      }
-      catch (InvalidOperationException)
-      {
-        var shortcutItem = new Serialization.KeyboardShortcuts.ShortcutItem()
-        {
-          CommandName = commandName,
-          CommandId = commandId,
-          Shortcuts = commandShortcuts,
-          Paths = $"{tabName}>{panelName}"
-        };
-        shortcuts.Add(shortcutItem);
-        Rhinoceros.ModalScope.Exit += ShowShortcutHelp;
-      }
-
-      Serialization.KeyboardShortcuts.SaveAs(shortcuts, Path.Combine(Revit.CurrentUsersDataFolderPath, "KeyboardShortcuts.xml"));
-    }
-
-    static void ShowShortcutHelp(object sender, EventArgs e)
-    {
-      Rhinoceros.ModalScope.Exit -= ShowShortcutHelp;
-
-      using
-      (
-        var taskDialog = new TaskDialog(MethodBase.GetCurrentMethod().DeclaringType.FullName)
-        {
-          Title = "New Shortcut",
-          MainIcon = TaskDialogIcons.IconInformation,
-          TitleAutoPrefix = true,
-          AllowCancellation = true,
-          MainInstruction = $"Keyboard shortcut 'R' is now assigned to Rhino",
-          MainContent = $"You can use R key to restore previously visible Rhino windows over Revit window every time you need them.",
-          FooterText = "This is a one time message",
-        }
-      )
-      {
-        taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Customize keyboard shortcuts…");
-        if (taskDialog.Show() == TaskDialogResult.CommandLink1)
-        {
-          Revit.ActiveUIApplication.PostCommand(RevitCommandId.LookupPostableCommandId(PostableCommand.KeyboardShortcuts));
+          if(Settings.KeyboardShortcuts.RegisterDefaultShortcut("Add-Ins", ribbonPanel.Name, typeof(CommandRhinoInside).Name, CommandName, "R#Ctrl+R"))
+            External.ActivationGate.Exit += ShowShortcutHelp;
         }
       }
     }
 
     public override Result Execute(ExternalCommandData data, ref string message, Autodesk.Revit.DB.ElementSet elements)
     {
-      var result = Result.Failed;
+      if
+      (
+        (Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl)) &&
+        (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
+      )
+        return ShowLoadError(data);
+
       string rhinoTab = Addin.RhinoVersionInfo?.ProductName ?? "Rhinoceros";
 
-      if (RhinoCommand.Availability.Available)
+      if (Addin.CurrentStatus == Addin.Status.Ready)
       {
-        if (Keyboard.IsKeyDown(Key.LeftCtrl))
+        if (Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl))
           return Rhinoceros.RunCommandAbout();
 
-        using (var modal = new Rhinoceros.ModalScope())
-          result = modal.Run(false, true);
+        if
+        (
+          Rhinoceros.MainWindow.Visible ||
+          Rhinoceros.MainWindow.ActivePopup?.IsInvalid == false
+        )
+        {
+          Rhinoceros.MainWindow.BringToFront();
+          return Result.Succeeded;
+        }
 
         // If no windows are visible we show the Ribbon tab
-        if (result == Result.Cancelled)
+        return data.Application.ActivateRibbonTab(rhinoTab) ? Result.Succeeded : Result.Failed;
+      }
+
+      var result = Result.Failed;
+      switch (result = Revit.OnStartup(Revit.ApplicationUI))
+      {
+        case Result.Succeeded:
+          // Update Rhino button Tooltip
+          Button.ToolTip = $"Restores previously visible Rhino windows on top of Revit window";
+          Button.LongDescription = $"Use CTRL key to open a Rhino model";
+
+          // Register UI on Revit
+          data.Application.CreateRibbonTab(rhinoTab);
+
+          var RhinocerosPanel = data.Application.CreateRibbonPanel(rhinoTab, "Rhinoceros");
+          HelpCommand.CreateUI(RhinocerosPanel);
+          RhinocerosPanel.AddSeparator();
+          CommandRhino.CreateUI(RhinocerosPanel);
+          CommandPython.CreateUI(RhinocerosPanel);
+
+          var GrasshopperPanel = data.Application.CreateRibbonPanel(rhinoTab, "Grasshopper");
+          CommandGrasshopper.CreateUI(GrasshopperPanel);
+          CommandGrasshopperPlayer.CreateUI(GrasshopperPanel);
+          CommandGrasshopperPreview.CreateUI(GrasshopperPanel);
+          CommandGrasshopperRecompute.CreateUI(GrasshopperPanel);
+          CommandGrasshopperBake.CreateUI(GrasshopperPanel);
+
+          var SamplesPanel = data.Application.CreateRibbonPanel(rhinoTab, "Samples");
+          Samples.Sample1.CreateUI(SamplesPanel);
+          Samples.Sample4.CreateUI(SamplesPanel);
+          Samples.Sample6.CreateUI(SamplesPanel);
+          Samples.Sample8.CreateUI(SamplesPanel);
+
           result = data.Application.ActivateRibbonTab(rhinoTab) ? Result.Succeeded : Result.Failed;
-
-        return result;
-      }
-
-      result = Revit.OnStartup(Revit.ApplicationUI);
-      if (RhinoCommand.Availability.Available = result == Result.Succeeded)
-      {
-        // Update Rhino button Tooltip
-        Button.ToolTip = $"Restores previously visible Rhino windows on top of Revit window";
-        Button.LongDescription = $"Use CTRL key to open a Rhino model";
-
-        // Register UI on Revit
-        data.Application.CreateRibbonTab(rhinoTab);
-
-        var RhinocerosPanel = data.Application.CreateRibbonPanel(rhinoTab, "Rhinoceros");
-        HelpCommand.CreateUI(RhinocerosPanel);
-        RhinocerosPanel.AddSeparator();
-        CommandRhino.CreateUI(RhinocerosPanel);
-        CommandPython.CreateUI(RhinocerosPanel);
-
-        var GrasshopperPanel = data.Application.CreateRibbonPanel(rhinoTab, "Grasshopper");
-        CommandGrasshopper.CreateUI(GrasshopperPanel);
-        CommandGrasshopperPlayer.CreateUI(GrasshopperPanel);
-        CommandGrasshopperPreview.CreateUI(GrasshopperPanel);
-        CommandGrasshopperRecompute.CreateUI(GrasshopperPanel);
-        CommandGrasshopperBake.CreateUI(GrasshopperPanel);
-
-        var SamplesPanel = data.Application.CreateRibbonPanel(rhinoTab, "Samples");
-        Samples.Sample1.CreateUI(SamplesPanel);
-        Samples.Sample4.CreateUI(SamplesPanel);
-        Samples.Sample6.CreateUI(SamplesPanel);
-        Samples.Sample8.CreateUI(SamplesPanel);
-      }
-
-      if (result == Result.Succeeded)
-      {
-        // Activate Rhinoceros Tab
-        result = data.Application.ActivateRibbonTab(rhinoTab) ? Result.Succeeded : Result.Failed;
-      }
-      else
-      {
-#if !DEBUG
-        // No more loads in this session
-        Button.Enabled = false;
-#endif
-        Button.ToolTip = "Failed to load.";
-
-        ShowLoadError(data);
+          break;
+        case Result.Cancelled:
+          Button.Enabled = false;
+          Button.ToolTip = "Rhino.Inside has expired.";
+          Button.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, @"https://www.rhino3d.com/download/rhino.inside-revit/7/wip"));
+          break;
+        case Result.Failed:
+          Button.Enabled = false;
+          Button.ToolTip = "Rhino.Inside failed to load.";
+          ShowLoadError(data);
+          break;
       }
 
       return result;
     }
 
-    void ShowLoadError(ExternalCommandData data)
+    static void ShowShortcutHelp(object sender, EventArgs e)
+    {
+      if (sender is IExternalCommand)
+      {
+        External.ActivationGate.Exit -= ShowShortcutHelp;
+
+        using
+        (
+          var taskDialog = new TaskDialog("New Shortcut")
+          {
+            Id = $"{MethodBase.GetCurrentMethod().DeclaringType}.{MethodBase.GetCurrentMethod().Name}",
+            MainIcon = TaskDialogIcons.IconInformation,
+            TitleAutoPrefix = true,
+            AllowCancellation = true,
+            MainInstruction = $"Keyboard shortcut 'R' is now assigned to Rhino",
+            MainContent = $"You can use R key to restore previously visible Rhino windows over Revit window every time you need them.",
+            FooterText = "This is a one time message",
+          }
+        )
+        {
+          taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Customize keyboard shortcuts…");
+          if (taskDialog.Show() == TaskDialogResult.CommandLink1)
+          {
+            Revit.ActiveUIApplication.PostCommand(RevitCommandId.LookupPostableCommandId(PostableCommand.KeyboardShortcuts));
+          }
+        }
+      }
+    }
+
+    Result ShowLoadError(ExternalCommandData data)
     {
       using
       (
-        var taskDialog = new TaskDialog("Ups! Something went wrong :(")
+        var taskDialog = new TaskDialog("Oops! Something went wrong :(")
         {
-          Id = MethodBase.GetCurrentMethod().DeclaringType.FullName,
+          Id = $"{MethodBase.GetCurrentMethod().DeclaringType}.{MethodBase.GetCurrentMethod().Name}",
           MainIcon = TaskDialogIcons.IconError,
           TitleAutoPrefix = true,
-          AllowCancellation = false,
+          AllowCancellation = true,
           MainInstruction = "Rhino.Inside failed to load",
-          MainContent = "Do you want to report this by email to tech@mcneel.com?",
-          ExpandedContent = "This problem use to be due an incompatibility with other installed Addins.\n\n" +
-                            "While running on these modes you may see other Addins errors and it may take longer to load, don't worry about that no persistent change will be made on your computer.",
-          CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-          DefaultButton = TaskDialogResult.Yes,
-          VerificationText = "Exclude installed Addins list from the report.",
+          MainContent = $"Please run some tests before reporting.{Environment.NewLine}Those tests would help us figure out what happened.",
+          ExpandedContent = "This problem use to be due an incompatibility with other installed add-ins.\n\n" +
+                            "While running on these modes you may see other add-ins errors and it may take longer to load, don't worry about that no persistent change will be made on your computer.",
+          VerificationText = "Exclude installed add-ins list from the report.",
           FooterText = "Current version: " + Addin.DisplayVersion
         }
       )
       {
-        taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Run Revit without other Addins…", "Good for testing if Rhino.Inside would load if no other Addin were installed.");
-        taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Run Rhino.Inside in verbose mode…", "Enables all logging mechanisms built in Rhino for support purposes.");
+        taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "1. Run Revit without other Addins…", "Good for testing if Rhino.Inside would load if no other add-in were installed.");
+        taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "2. Run Rhino.Inside in verbose mode…", "Enables all logging mechanisms built in Rhino for support purposes.");
+        taskDialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "3. Send report…", "Reports this problem by email to tech@mcneel.com");
+        taskDialog.DefaultButton = TaskDialogResult.CommandLink3;
 
-        var keepAsking = true;
-        while(keepAsking)
+        while (true)
           switch (taskDialog.Show())
           {
             case TaskDialogResult.CommandLink1: RunWithoutAddIns(data); break;
             case TaskDialogResult.CommandLink2: RunVerboseMode(data); break;
-            case TaskDialogResult.Yes: ReportAddins(data, !taskDialog.WasVerificationChecked()); keepAsking = false; break;
-            default: keepAsking = false; break;
+            case TaskDialogResult.CommandLink3:
+              ErrorReport.SendEmail
+              (
+                data.Application,
+                !taskDialog.WasVerificationChecked(),
+                new string[]
+                {
+                  data.Application.Application.RecordingJournalFilename,
+                  RhinoDebugMessages_txt,
+                  RhinoAssemblyResolveLog_txt
+                }
+              );
+              return Result.Succeeded;
+            default: return Result.Cancelled;
           }
       }
     }
+
+    void RunWithoutAddIns(ExternalCommandData data)
+    {
+      var SafeModeFolder = Path.Combine(data.Application.Application.CurrentUserAddinsLocation, "RhinoInside.Revit", "SafeMode");
+      Directory.CreateDirectory(SafeModeFolder);
+
+      Settings.AddIns.GetInstalledAddins(data.Application.Application.VersionNumber, out var AddinFiles);
+      if (AddinFiles.Where(x => Path.GetFileName(x) == "RhinoInside.Revit.addin").FirstOrDefault() is string RhinoInsideRevitAddinFile)
+      {
+        var SafeModeAddinFile = Path.Combine(SafeModeFolder, Path.GetFileName(RhinoInsideRevitAddinFile));
+        File.Copy(RhinoInsideRevitAddinFile, SafeModeAddinFile, true);
+
+        if(Settings.AddIns.LoadFrom(SafeModeAddinFile, out var SafeModeAddin))
+        {
+          SafeModeAddin.First().Assembly = Assembly.GetCallingAssembly().Location;
+          Settings.AddIns.SaveAs(SafeModeAddin, SafeModeAddinFile);
+        }
+
+        var journalFile = Path.Combine(SafeModeFolder, "RhinoInside.Revit-SafeMode.txt");
+        using (var journal = File.CreateText(journalFile))
+        {
+          journal.WriteLine("' ");
+          journal.WriteLine("Dim Jrn");
+          journal.WriteLine("Set Jrn = CrsJournalScript");
+          journal.WriteLine(" Jrn.RibbonEvent \"TabActivated:Add-Ins\"");
+          journal.WriteLine(" Jrn.RibbonEvent \"Execute external command:CustomCtrl_%CustomCtrl_%Add-Ins%Rhinoceros%CommandRhinoInside:RhinoInside.Revit.UI.CommandRhinoInside\"");
+        }
+
+        var batchFile = Path.Combine(SafeModeFolder, "RhinoInside.Revit-SafeMode.bat");
+        using (var batch = File.CreateText(batchFile))
+        {
+          batch.WriteLine($"\"{Process.GetCurrentProcess().MainModule.FileName}\" \"{Path.GetFileName(journalFile)}\"");
+        }
+
+        var si = new ProcessStartInfo()
+        {
+          FileName = Process.GetCurrentProcess().MainModule.FileName,
+          Arguments = $"\"{journalFile}\""
+        };
+        using (var RevitApp = Process.Start(si)) { RevitApp.WaitForExit(); }
+      }
+    }
+
+    static readonly string RhinoDebugMessages_txt = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RhinoDebugMessages.txt");
+    static readonly string RhinoAssemblyResolveLog_txt = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "RhinoAssemblyResolveLog.txt");
 
     void RunVerboseMode(ExternalCommandData data)
     {
       const string SDKRegistryKeyName = @"Software\McNeel\Rhinoceros\SDK";
 
-      var RhinoDebugMessages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RhinoDebugMessages.txt");
-      if (File.Exists(RhinoDebugMessages))
-        File.Delete(RhinoDebugMessages);
+      if (File.Exists(RhinoDebugMessages_txt))
+        File.Delete(RhinoDebugMessages_txt);
+
+      if (File.Exists(RhinoAssemblyResolveLog_txt))
+        File.Delete(RhinoAssemblyResolveLog_txt);
+
+      using (File.Create(RhinoAssemblyResolveLog_txt)) { }
 
       bool deleteKey = false;
       int DebugLoggingEnabled = 0;
@@ -460,14 +583,14 @@ namespace RhinoInside.Revit.UI
       try
       {
         using (var existingSDK = Registry.CurrentUser.OpenSubKey(SDKRegistryKeyName))
-        if (existingSDK is null)
-        {
-          using (var newSDK = Registry.CurrentUser.CreateSubKey(SDKRegistryKeyName))
-          if (newSDK is null)
-            return;
+          if (existingSDK is null)
+          {
+            using (var newSDK = Registry.CurrentUser.CreateSubKey(SDKRegistryKeyName))
+              if (newSDK is null)
+                return;
 
-          deleteKey = true;
-        }
+            deleteKey = true;
+          }
 
         try
         {
@@ -504,86 +627,9 @@ namespace RhinoInside.Revit.UI
       finally
       {
         if (deleteKey)
-        try { Registry.CurrentUser.DeleteSubKey(SDKRegistryKeyName); }
-        catch (Exception) { }
+          try { Registry.CurrentUser.DeleteSubKey(SDKRegistryKeyName); }
+          catch (Exception) { }
       }
-    }
-
-    void RunWithoutAddIns(ExternalCommandData data)
-    {
-      using (new Serialization.LockAddIns(data.Application.Application.VersionNumber))
-      {
-        var si = new ProcessStartInfo()
-        {
-          FileName = Process.GetCurrentProcess().MainModule.FileName,
-          Arguments = "/nosplash",
-          UseShellExecute = false
-        };
-        si.EnvironmentVariables["RhinoInside_RunScript"] = "_Grasshopper";
-
-        using (var RevitApp = Process.Start(si)) { RevitApp.WaitForExit(); }
-      }
-    }
-
-    void ReportAddins(ExternalCommandData data, bool includeAddinsList)
-    {
-      var mailtoURI = @"mailto:tech@mcneel.com?subject=Rhino.Inside%20Revit%20failed%20to%20load&body=";
-
-      var mailBody = @"Please give us any additional info you see fit here..." + Environment.NewLine + Environment.NewLine;
-
-      var RhinoDebugMessages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RhinoDebugMessages.txt");
-      if (File.Exists(RhinoDebugMessages))
-        mailBody += $"<Please attach '{RhinoDebugMessages}' file here>" + Environment.NewLine + Environment.NewLine;
-
-      mailBody += $"Rhino.Inside: {Addin.DisplayVersion}" + Environment.NewLine;
-      var rhino = Addin.RhinoVersionInfo;
-      mailBody += $"Rhino: {rhino.ProductVersion} ({rhino.FileDescription})" + Environment.NewLine;
-      var revit = data.Application.Application;
-
-#if REVIT_2019
-      mailBody += $"Revit: {revit.SubVersionNumber} ({revit.VersionBuild})" + Environment.NewLine;
-#else
-      mailBody += $"Revit: {revit.VersionNumber} ({revit.VersionBuild})" + Environment.NewLine;
-#endif
-
-      if (includeAddinsList)
-      {
-        mailBody += @"Revit Addins:" + Environment.NewLine + Environment.NewLine;
-
-        Serialization.AddIns.GetInstalledAddins(data.Application.Application.VersionNumber, out var manifests);
-        foreach (var manifest in manifests)
-        {
-          mailBody += $"Manifest: {manifest}" + Environment.NewLine;
-          if (Serialization.AddIns.LoadFrom(manifest, out var revitAddins))
-          {
-            foreach (var addin in revitAddins)
-            {
-              if (!string.IsNullOrEmpty(addin.Type))
-                mailBody += $"Type: {addin.Type}" + Environment.NewLine;
-
-              if (!string.IsNullOrEmpty(addin.Name))
-                mailBody += $"Name: {addin.Name}" + Environment.NewLine;
-
-              if (!string.IsNullOrEmpty(addin.VendorDescription))
-                mailBody += $"VendorDescription: {addin.VendorDescription}" + Environment.NewLine;
-
-              if (!string.IsNullOrEmpty(addin.Assembly))
-              {
-                mailBody += $"Assembly: {addin.Assembly}" + Environment.NewLine;
-
-                var versionInfo = File.Exists(addin.Assembly) ? FileVersionInfo.GetVersionInfo(addin.Assembly) : null;
-                mailBody += $"FileVersion: {versionInfo?.FileVersion}" + Environment.NewLine;
-              }
-            }
-
-            mailBody += Environment.NewLine;
-          }
-        }
-      }
-
-      mailBody = Uri.EscapeDataString(mailBody);
-
-      using (Process.Start(mailtoURI + mailBody)) { }
     }
   }
 }

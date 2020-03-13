@@ -1,6 +1,6 @@
 ---
-title: Working with Revisions
-order: 60
+title: Revisions
+order: 67
 ---
 
 {% include ltr/en/wip_note.html %}

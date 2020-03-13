@@ -11,6 +11,9 @@ using Rhino.PlugIns;
 
 namespace RhinoInside.Revit.UI
 {
+  /// <summary>
+  /// Base class for all Rhino.Inside Revit commands that call Grasshopper API
+  /// </summary>
   abstract public class GrasshopperCommand : RhinoCommand
   {
     protected static readonly Guid PluginId = new Guid(0xB45A29B1, 0x4343, 0x4035, 0x98, 0x9E, 0x04, 0x4E, 0x85, 0x80, 0xD9, 0xCF);
@@ -24,10 +27,13 @@ namespace RhinoInside.Revit.UI
         throw new Exception("Failed to startup Grasshopper");
     }
 
-    public new class Availability : RhinoCommand.Availability
+    /// <summary>
+    /// Available when Grasshopper Plugin is available in Rhino
+    /// </summary>
+    protected new class Availability : RhinoCommand.Availability
     {
-      public override bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories) =>
-        base.IsCommandAvailable(applicationData, selectedCategories) &&
+      public override bool IsCommandAvailable(UIApplication _, CategorySet selectedCategories) =>
+        base.IsCommandAvailable(_, selectedCategories) &&
         (PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected) & (loaded | !loadProtected));
     }
   }
@@ -46,21 +52,14 @@ namespace RhinoInside.Revit.UI
         pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.Grasshopper.png", true);
         pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.Grasshopper.png");
         pushButton.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://www.grasshopper3d.com/"));
-        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool _, out bool _);
       }
     }
 
     public override Result Execute(ExternalCommandData data, ref string message, ElementSet elements)
     {
-      using (var modal = new Rhinoceros.ModalScope())
-      {
-        GH.Guest.Script.ShowEditor();
-
-        if(!GH.Guest.Script.IsEditorLoaded())
-          return Result.Failed;
-
-        return modal.Run(false);
-      }
+      GH.Guest.ShowAsync();
+      return Result.Succeeded;
     }
   }
 
@@ -68,11 +67,11 @@ namespace RhinoInside.Revit.UI
   [Transaction(TransactionMode.Manual), Regeneration(RegenerationOption.Manual)]
   class CommandGrasshopperRecompute : GrasshopperCommand
   {
-    public new class Availability : GrasshopperCommand.Availability
+    protected new class Availability : GrasshopperCommand.Availability
     {
-      public override bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories) =>
-        base.IsCommandAvailable(applicationData, selectedCategories) &&
-        Instances.ActiveCanvas?.Document != null;
+      public override bool IsCommandAvailable(UIApplication _, CategorySet selectedCategories) =>
+        base.IsCommandAvailable(_, selectedCategories) &&
+        Instances.ActiveCanvas?.Document is object;
     }
 
     public static void CreateUI(RibbonPanel ribbonPanel)
@@ -82,9 +81,9 @@ namespace RhinoInside.Revit.UI
       if (ribbonPanel.AddItem(buttonData) is PushButton pushButton)
       {
         pushButton.ToolTip = "Force a complete recompute of all objects";
-        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Recompute_24x24.png", true);
-        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Recompute_24x24.png");
-        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Recompute.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Recompute.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool _, out bool _);
       }
     }
 
@@ -122,11 +121,11 @@ namespace RhinoInside.Revit.UI
   [Transaction(TransactionMode.Manual), Regeneration(RegenerationOption.Manual)]
   class CommandGrasshopperBake : GrasshopperCommand
   {
-    public new class Availability : GrasshopperCommand.Availability
+    protected new class Availability : GrasshopperCommand.Availability
     {
-      public override bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories) =>
-        base.IsCommandAvailable(applicationData, selectedCategories) &&
-        Instances.ActiveCanvas?.Document != null &&
+      public override bool IsCommandAvailable(UIApplication _, CategorySet selectedCategories) =>
+        base.IsCommandAvailable(_, selectedCategories) &&
+        Instances.ActiveCanvas?.Document is object &&
         Instances.ActiveCanvas.Document.SelectedCount > 0;
     }
 
@@ -135,7 +134,7 @@ namespace RhinoInside.Revit.UI
       var items = ribbonPanel.AddStackedItems
       (
         new ComboBoxData("Category"),
-        NewPushButtonData<CommandGrasshopperBake, Availability>("Bake Selected")
+        NewPushButtonData<CommandGrasshopperBake, NeedsActiveDocument<Availability>>("Bake Selected")
       );
 
       if(items[0] is ComboBox comboBox)
@@ -176,9 +175,9 @@ namespace RhinoInside.Revit.UI
       if (items[1] is PushButton bakeButton)
       {
         bakeButton.ToolTip = "Bake geometry in all selected objects";
-        bakeButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Bake_24x24.png", true);
-        bakeButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Bake_24x24.png");
-        bakeButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+        bakeButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Bake.png", true);
+        bakeButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Bake.png");
+        bakeButton.Visible = PlugIn.PlugInExists(PluginId, out bool _, out bool _);
       }
     }
 
@@ -256,7 +255,7 @@ namespace RhinoInside.Revit.UI
             geometryToBake.Add(new KeyValuePair<string, List<Rhino.Geometry.GeometryBase>>(param.NickName, geometryList));
         }
 
-        Bake(data.Application.ActiveUIDocument.Document, "Grasshopper.Bake", geometryToBake);
+        Bake(data.Application.ActiveUIDocument.Document, "Bake Selected", geometryToBake);
       }
 
       return Result.Succeeded;
@@ -281,13 +280,11 @@ namespace RhinoInside.Revit.UI
 #endif
     }
 
-    public new class Availability : RhinoCommand.Availability
+    protected new class Availability : NeedsActiveDocument<GrasshopperCommand.Availability>
     {
-      public override bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories)
-      {
-        return base.IsCommandAvailable(applicationData, selectedCategories) &&
-               !applicationData.ActiveUIDocument.Document.IsFamilyDocument;
-      }
+      public override bool IsCommandAvailable(UIApplication _, CategorySet selectedCategories) =>
+        base.IsCommandAvailable(_, selectedCategories) &&
+        Revit.ActiveUIDocument?.Document.IsFamilyDocument == false;
     }
   }
 
@@ -302,9 +299,9 @@ namespace RhinoInside.Revit.UI
       if (radioButtonGroup.AddItem(buttonData) is ToggleButton pushButton)
       {
         pushButton.ToolTip = "Don't draw any preview geometry";
-        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Off_24x24.png", true);
-        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Off_24x24.png");
-        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Off.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Off.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool _, out bool _);
 
         if (GH.PreviewServer.PreviewMode == GH_PreviewMode.Disabled)
           radioButtonGroup.Current = pushButton;
@@ -329,9 +326,9 @@ namespace RhinoInside.Revit.UI
       if (radioButtonGroup.AddItem(buttonData) is ToggleButton pushButton)
       {
         pushButton.ToolTip = "Draw wireframe preview geometry";
-        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Wireframe_24x24.png", true);
-        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Wireframe_24x24.png");
-        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Wireframe.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Wireframe.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool _, out bool _);
 
         if (GH.PreviewServer.PreviewMode == GH_PreviewMode.Wireframe)
           radioButtonGroup.Current = pushButton;
@@ -356,9 +353,9 @@ namespace RhinoInside.Revit.UI
       if (radioButtonGroup.AddItem(buttonData) is ToggleButton pushButton)
       {
         pushButton.ToolTip = "Draw shaded preview geometry";
-        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Shaded_24x24.png", true);
-        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Shaded_24x24.png");
-        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool loaded, out bool loadProtected);
+        pushButton.Image = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Shaded.png", true);
+        pushButton.LargeImage = ImageBuilder.LoadBitmapImage("RhinoInside.Resources.GH.Toolbar.Preview_Shaded.png");
+        pushButton.Visible = PlugIn.PlugInExists(PluginId, out bool _, out bool _);
 
         if(GH.PreviewServer.PreviewMode == GH_PreviewMode.Shaded)
           radioButtonGroup.Current = pushButton;

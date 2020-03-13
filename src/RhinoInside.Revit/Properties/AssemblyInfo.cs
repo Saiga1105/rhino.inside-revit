@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("Robert McNeel & Associates")]
-[assembly: AssemblyProduct("RhinoInside")]
-[assembly: AssemblyCopyright("© 2019 Robert McNeel & Associates.")]
+[assembly: AssemblyProduct("Rhino.Inside")]
+[assembly: AssemblyCopyright("© 2019-2020 Robert McNeel & Associates.")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -21,7 +21,7 @@ using System.Runtime.InteropServices;
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.UseDllDirectoryForDependencies | DllImportSearchPath.System32)]
 
 // The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("c5bc7226-0e13-428c-9361-6f6b83169bd7")]
+[assembly: Guid("C5BC7226-0E13-428C-9361-6F6B83169BD7")]
 
 // Version information for an assembly consists of the following four values:
 //
